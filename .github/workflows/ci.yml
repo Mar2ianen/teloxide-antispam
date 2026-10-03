@@ -1,0 +1,27 @@
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        features: [minimal, unicode, classifier, scoring, cas, default, all]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: python3 -m unittest discover -s tools -p 'test_*.py'
+      - shell: bash
+        run: |
+          args=()
+          case '${{ matrix.features }}' in
+            minimal) args=(--no-default-features) ;;
+            all) args=(--all-features) ;;
+            default) ;;
+            *) args=(--no-default-features --features '${{ matrix.features }}') ;;
+          esac
+          cargo test --locked --all-targets "${args[@]}"
+          cargo clippy --locked --all-targets "${args[@]}" -- -D warnings

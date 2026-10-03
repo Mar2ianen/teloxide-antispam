@@ -63,6 +63,13 @@ The optional public ALT model is distributed as a release asset, not embedded
 in the crate. See [its model card](docs/ALT_MODEL_CARD.md) for provenance,
 checksum, metrics, and limitations.
 
+The [training methodology](docs/TRAINING.md) documents preprocessing, split
+policy, feature extraction, fitting, and export without redistributing data.
+Datasets, chat exports, moderator logs, raw predictions, and identifying
+examples are not published. Public materials are code, methodology, aggregate
+metrics, and model weights. Contact the maintainer for data-access questions;
+access is reviewed case by case and is not an automatic redistribution grant.
+
 ```sh
 python3 tools/calibrate.py predictions.jsonl --version my-validation-v1 --output calibration.json
 ```

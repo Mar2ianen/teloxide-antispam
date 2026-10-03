@@ -10,6 +10,8 @@ loading, persistence, and Telegram enforcement belong to the consumer.
 - Before committing: cargo fmt --check, cargo test --all-targets --all-features,
   cargo clippy --all-targets --all-features -- -D warnings, and the feature matrix.
 - Never commit private corpora, moderation exports, credentials, or DSNs.
+- Publish methods, aggregate metrics, and weights, not datasets or identifying
+  examples. Data access requests require separate provenance/privacy review.
 - A model score does not authorize bans. Unreviewed exports and account bans
   are not gold labels for individual messages.
 - Preprocessing, model artifacts, and calibration must have explicit versions.

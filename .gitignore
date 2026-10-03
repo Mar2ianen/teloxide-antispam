@@ -1,3 +1,8 @@
 /target/
 /.env*
 __pycache__/
+# Private training/evaluation inputs, not model weights.
+/data/
+/datasets/
+/exports/
+/predictions*.jsonl

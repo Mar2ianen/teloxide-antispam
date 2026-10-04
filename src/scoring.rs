@@ -45,6 +45,12 @@ pub struct FirstMessageScoreContext {
     /// Trained multilabel categories. Heuristic marker mapping is reported
     /// separately as names, never as fake probabilities.
     pub category_scores: Option<CategoryScores>,
+    /// User reputation probability (`teloxide-statistics` head). Small
+    /// supporting slot only: user history texture, never decisive and never
+    /// a ban authorization on its own.
+    pub reputation_probability: Option<f64>,
+    pub reputation_model_version: Option<String>,
+    pub reputation_calibration: Option<teloxide_statistics::reputation::Calibration>,
     /// Audit observations only: no points and no decisive decision-tree leaf.
     pub text_observations: Option<TextObservations>,
 }
@@ -309,6 +315,11 @@ fn score_first_message(
     let ml_score = text_calibration
         .score(valid_text_probability)
         .max(embedding_calibration.score(valid_embedding_probability));
+    let valid_reputation_probability = context
+        .reputation_probability
+        .filter(|p| p.is_finite() && (0.0..=1.0).contains(p));
+    let reputation_calibration = context.reputation_calibration.clone().unwrap_or_default();
+    let reputation_score = reputation_calibration.score(valid_reputation_probability);
     let grammar_conflict = context.feminine_profile_name
         && assessment.self_reference_grammar == SelfReferenceGrammar::Masculine
         && assessment.profile_name_grammar_relation == ProfileNameGrammarRelation::Conflicts;
@@ -316,8 +327,13 @@ fn score_first_message(
     let rkn_vpn_score = if rkn_vpn_promotion { 35 } else { 0 };
     let known_campaign_match = context.template_matches > 0
         || valid_similarity.is_some_and(|similarity| similarity >= 0.88);
-    let supporting_score =
-        llm_score + template_score + embedding_score + persona_score + ml_score + grammar_score;
+    let supporting_score = llm_score
+        + template_score
+        + embedding_score
+        + persona_score
+        + ml_score
+        + reputation_score
+        + grammar_score;
     let decisive = rkn_vpn_promotion
         || decisive_direct_dm_funnel
         || decisive_external_promo_funnel
@@ -387,6 +403,8 @@ fn score_first_message(
             "embedding_spam_probability": valid_embedding_probability,
             "embedding_model_version": context.embedding_model_version,
             "embedding_head_version": context.embedding_head_version,
+            "reputation_probability": valid_reputation_probability,
+            "reputation_model_version": context.reputation_model_version,
         });
         if let Some(path) = decision_tree_path {
             signal["decision_tree_version"] = json!(FIRST_MESSAGE_DECISION_TREE_VERSION);
@@ -401,6 +419,7 @@ fn score_first_message(
     let suspected = suspected_categories(assessment);
     if valid_text_probability.is_some()
         || valid_embedding_probability.is_some()
+        || valid_reputation_probability.is_some()
         || valid_categories.is_some()
         || !suspected.is_empty()
         || context
@@ -420,6 +439,9 @@ fn score_first_message(
             "embedding_model_version": context.embedding_model_version,
             "embedding_head_version": context.embedding_head_version,
             "embedding_calibration": embedding_calibration,
+            "reputation_probability": valid_reputation_probability,
+            "reputation_model_version": context.reputation_model_version,
+            "reputation_calibration": reputation_calibration,
             "category_scores": context.category_scores,
             "suspected_categories": suspected,
             "text_preprocessing_version": PREPROCESSING_VERSION,
@@ -854,6 +876,65 @@ mod tests {
         assert_eq!(observation[0]["embedding_spam_probability"], 0.95);
         assert_eq!(observation[0]["embedding_model_version"], "test-encoder-3");
         assert_eq!(observation[0]["embedding_head_version"], "test-head-v1");
+    }
+
+    #[test]
+    fn reputation_adds_small_supporting_score_and_stays_observable() {
+        let assessment = assessment(
+            r#"{
+                "relation_to_chat":"on_topic", "direct_dm_offer":false,
+                "offtopic_promo":false, "template_campaign":false,
+                "self_reference_grammar":"none_or_unclear",
+                "profile_name_grammar_relation":"not_applicable",
+                "risk_markers":[], "evidence":[],
+                "summary":"Обычный вопрос.", "confidence":0.9
+            }"#,
+            "null",
+        );
+        let calibration = teloxide_statistics::reputation::Calibration {
+            version: "test-rep-cal-v1".to_owned(),
+            supporting_threshold: 0.8,
+            strong_threshold: 0.95,
+            supporting_score: 4,
+            strong_score: 8,
+        };
+        for (probability, expected) in [(0.85, 4), (0.96, 8), (0.5, 0)] {
+            let components = score_assessment(
+                0,
+                json!([]),
+                &assessment,
+                FirstMessageScoreContext {
+                    reputation_probability: Some(probability),
+                    reputation_model_version: Some("rep-test-v1".to_owned()),
+                    reputation_calibration: Some(calibration.clone()),
+                    ..Default::default()
+                },
+                70,
+            );
+            assert_eq!(components.first_message_score, expected);
+            let observation = components
+                .first_message_signals
+                .as_array()
+                .expect("observation signal must exist")
+                .iter()
+                .find(|signal| signal["label"] == "first_message_text_observation")
+                .expect("observation-only signal must be present");
+            assert_eq!(observation["decision"], "observation_only");
+            assert_eq!(observation["reputation_model_version"], "rep-test-v1");
+        }
+        // Invalid probability never scores but stays silent only without
+        // other evidence; here the reputation alone must not invent points.
+        let silent = score_assessment(
+            0,
+            json!([]),
+            &assessment,
+            FirstMessageScoreContext {
+                reputation_probability: Some(f64::NAN),
+                ..Default::default()
+            },
+            70,
+        );
+        assert_eq!(silent.first_message_score, 0);
     }
 
     #[test]

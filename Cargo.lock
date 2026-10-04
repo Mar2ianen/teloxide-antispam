@@ -1298,7 +1298,7 @@ dependencies = [
 
 [[package]]
 name = "teloxide-antispam"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "base64 0.22.1",
@@ -1307,10 +1307,21 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "teloxide-statistics",
  "tracing",
  "unicode-normalization",
  "unicode-properties",
  "unicode-script",
+]
+
+[[package]]
+name = "teloxide-statistics"
+version = "0.2.0"
+source = "git+https://github.com/Mar2ianen/teloxide-statistics?rev=7e2a5859849044121b9e693bc1ed36e7440db139#7e2a5859849044121b9e693bc1ed36e7440db139"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

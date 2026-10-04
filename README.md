@@ -64,7 +64,9 @@ an artifact-specific result, not a guarantee for every Unicode code point.
 
 The optional public ALT model is distributed as a release asset, not embedded
 in the crate. See [its model card](docs/ALT_MODEL_CARD.md) for provenance,
-checksum, metrics, and limitations.
+checksum, metrics, and limitations. The optional Gemma embedding head is
+distributed the same way; see [its model card](docs/GEMMA_HEAD_CARD.md).
+It requires document-prefixed vectors and an `embedding_model` match.
 
 The [training methodology](docs/TRAINING.md) documents preprocessing, split
 policy, feature extraction, fitting, and export without redistributing data.

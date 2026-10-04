@@ -90,6 +90,11 @@ def main():
     parser.add_argument("--version", required=True)
     parser.add_argument("--normalize", action="store_true", default=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--calibration",
+        default=None,
+        help="optional JSON object with version/supporting_threshold/strong_threshold/supporting_score/strong_score from tools/calibrate.py; omitted for loader-default legacy calibration",
+    )
     args = parser.parse_args()
 
     rows = load_rows(args.rows)
@@ -117,6 +122,8 @@ def main():
         "normalize": args.normalize,
         **heads,
     }
+    if args.calibration is not None:
+        export["calibration"] = json.loads(args.calibration)
     args.output.write_text(json.dumps(export) + "\n")
 
 

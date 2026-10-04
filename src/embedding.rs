@@ -11,6 +11,7 @@
 use serde::Deserialize;
 use std::collections::BTreeMap;
 
+use crate::calibration::LinearScoreCalibration;
 use crate::categories::{CategoryScore, CategoryScores, SpamCategory};
 
 /// Versioned multitask head over a frozen embedding.
@@ -23,6 +24,7 @@ pub struct EmbeddingSpamModel {
     pub spam_weights: Vec<f64>,
     pub spam_intercept: f64,
     pub category_heads: BTreeMap<SpamCategory, CategoryHead>,
+    pub calibration: LinearScoreCalibration,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +44,10 @@ struct EmbeddingExport {
     spam: DenseHeadExport,
     #[serde(default)]
     categories: BTreeMap<SpamCategory, DenseHeadExport>,
+    /// Supporting-score operating points selected on validation.
+    /// Absent in older packs: defaults to the legacy text calibration.
+    #[serde(default)]
+    calibration: LinearScoreCalibration,
 }
 
 #[derive(Deserialize)]
@@ -64,6 +70,7 @@ impl EmbeddingSpamModel {
         if export.dim == 0 || export.dim > 8192 {
             anyhow::bail!("embedding head dim out of range");
         }
+        export.calibration.validate().map_err(anyhow::Error::msg)?;
         if !export.spam.intercept.is_finite()
             || !export.spam.weights.iter().all(|w| w.is_finite())
             || export.spam.weights.len() != export.dim
@@ -94,6 +101,7 @@ impl EmbeddingSpamModel {
             spam_weights: export.spam.weights,
             spam_intercept: export.spam.intercept,
             category_heads,
+            calibration: export.calibration,
         })
     }
 
@@ -201,7 +209,8 @@ mod tests {
                 "version": "test-v1", "embedding_model": "test-encoder-3",
                 "dim": 3, "normalize": true,
                 "spam": {"weights": [1.0, 0.0, 0.0], "intercept": 0.0},
-                "categories": {"job_scam": {"weights": [0.0, 2.0, 0.0], "intercept": -1.0}}
+                "categories": {"job_scam": {"weights": [0.0, 2.0, 0.0], "intercept": -1.0}},
+                "calibration": {"version": "test-cal-v1", "supporting_threshold": 0.75, "strong_threshold": 0.9, "supporting_score": 10, "strong_score": 18}
             }"#,
         )
         .unwrap()
@@ -230,6 +239,11 @@ mod tests {
         assert!(EmbeddingSpamModel::load(r#"{"version":"v","embedding_model":"m","dim":0,"spam":{"weights":[],"intercept":0.0}}"#).is_err());
         assert!(EmbeddingSpamModel::load(r#"{"version":"v","embedding_model":"m","dim":1,"spam":{"weights":[1.0],"intercept":0.0},"extra":1}"#).is_err());
         assert!(EmbeddingSpamModel::load(r#"{"version":"v","embedding_model":"m","dim":1,"spam":{"weights":[null],"intercept":0.0}}"#).is_err());
+    }
+
+    #[test]
+    fn loader_rejects_invalid_calibration() {
+        assert!(EmbeddingSpamModel::load(r#"{"version":"v","embedding_model":"m","dim":1,"spam":{"weights":[1.0],"intercept":0.0},"calibration":{"version":"c","supporting_threshold":0.9,"strong_threshold":0.5,"supporting_score":10,"strong_score":18}}"#).is_err());
     }
 
     #[test]

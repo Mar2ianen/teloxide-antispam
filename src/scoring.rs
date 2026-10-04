@@ -36,7 +36,11 @@ pub struct FirstMessageScoreContext {
     /// Frozen-encoder spam probability (`embedding` module).
     /// `None` when the consumer has no head or the vector was unusable.
     pub embedding_spam_probability: Option<f64>,
+    /// Encoder id of the scored vector (e.g. the stored `embedding_model`).
+    /// Must match the head's encoder; a mismatch is no evidence.
     pub embedding_model_version: Option<String>,
+    /// Trained head artifact version that produced the probability.
+    pub embedding_head_version: Option<String>,
     pub embedding_calibration: Option<LinearScoreCalibration>,
     /// Trained multilabel categories. Heuristic marker mapping is reported
     /// separately as names, never as fake probabilities.
@@ -382,6 +386,7 @@ fn score_first_message(
             "linear_spam_model_version": context.linear_spam_model_version,
             "embedding_spam_probability": valid_embedding_probability,
             "embedding_model_version": context.embedding_model_version,
+            "embedding_head_version": context.embedding_head_version,
         });
         if let Some(path) = decision_tree_path {
             signal["decision_tree_version"] = json!(FIRST_MESSAGE_DECISION_TREE_VERSION);
@@ -413,6 +418,7 @@ fn score_first_message(
             "linear_spam_model_version": context.linear_spam_model_version,
             "embedding_spam_probability": valid_embedding_probability,
             "embedding_model_version": context.embedding_model_version,
+            "embedding_head_version": context.embedding_head_version,
             "embedding_calibration": embedding_calibration,
             "category_scores": context.category_scores,
             "suspected_categories": suspected,
@@ -834,6 +840,7 @@ mod tests {
                 linear_spam_probability: Some(0.95),
                 embedding_spam_probability: Some(0.95),
                 embedding_model_version: Some("test-encoder-3".to_owned()),
+                embedding_head_version: Some("test-head-v1".to_owned()),
                 ..Default::default()
             },
             70,
@@ -845,6 +852,8 @@ mod tests {
             .as_array()
             .expect("observation signal must exist");
         assert_eq!(observation[0]["embedding_spam_probability"], 0.95);
+        assert_eq!(observation[0]["embedding_model_version"], "test-encoder-3");
+        assert_eq!(observation[0]["embedding_head_version"], "test-head-v1");
     }
 
     #[test]

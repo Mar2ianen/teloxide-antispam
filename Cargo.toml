@@ -1,6 +1,6 @@
 [package]
 name = "teloxide-antispam"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2024"
 license = "MIT"
 description = "Shared anti-spam core for teloxide-based community bots: text utils, profile/message scoring signals, external reputation clients"

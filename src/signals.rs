@@ -274,16 +274,20 @@ impl RiskAccumulator {
     }
 
     fn finish(mut self, review_threshold: i32) -> RiskAnalysis {
-        self.score = self.score.min(100);
+        self.score = self.score.clamp(0, 100);
+        // Medium means "near review": at or above 40 but still below the
+        // configured threshold. A low threshold naturally leaves no medium
+        // band; a high threshold keeps near-misses out of low.
         let level = match self.score {
             score if score >= review_threshold => "high",
-            40..=69 => "medium",
+            score if score >= 40 => "medium",
             _ => "low",
         }
         .to_string();
         let primary_class = self
             .class_scores
             .iter()
+            .filter(|(_, score)| **score > 0)
             .max_by_key(|(_, score)| *score)
             .map(|(class, _)| class.as_str().to_string());
         let class_scores = self
@@ -780,13 +784,39 @@ fn recent_id_signal(
 const TELEGRAM_ID_PROBABILITY_SIGNAL_FLOOR: f64 = 0.10;
 const TELEGRAM_ID_PROBABILITY_SIGNAL_CEILING: f64 = 0.85;
 const TELEGRAM_ID_MAX_RISK_COEFFICIENT: f64 = 15.0;
+impl TelegramIdRiskModel {
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.version.trim().is_empty()
+            || !self.floor.is_finite()
+            || !self.ceil.is_finite()
+            || !self.k.is_finite()
+            || !self.midpoint_billion.is_finite()
+        {
+            return Err("telegram id model parameters must be finite with a version");
+        }
+        if self.floor > self.ceil {
+            return Err("telegram id model floor must not exceed ceil");
+        }
+        if self.k <= 0.0 {
+            return Err("telegram id model k must stay positive for monotonic growth");
+        }
+        Ok(())
+    }
+}
+
 pub fn telegram_id_spam_probability(user_id: i64, model: &TelegramIdRiskModel) -> f64 {
+    if model.validate().is_err() {
+        return 0.5;
+    }
     let id_billion = (user_id.max(0) as f64) / 1_000_000_000.0;
     let exponent = (model.k * (id_billion - model.midpoint_billion)).clamp(-60.0, 60.0);
     let sigmoid = 1.0 / (1.0 + (-exponent).exp());
     model.floor + (model.ceil - model.floor) * sigmoid
 }
 pub fn telegram_id_risk_coefficient(probability: f64) -> i32 {
+    if !probability.is_finite() {
+        return 0;
+    }
     let normalized = ((probability - TELEGRAM_ID_PROBABILITY_SIGNAL_FLOOR)
         / (TELEGRAM_ID_PROBABILITY_SIGNAL_CEILING - TELEGRAM_ID_PROBABILITY_SIGNAL_FLOOR))
         .clamp(0.0, 1.0);
@@ -1710,7 +1740,7 @@ pub fn char_count_i32(value: &str) -> i32 {
 }
 pub fn id_bucket(user_id: i64) -> String {
     match user_id {
-        0..=999_999_999 => "lt_1b",
+        ..=999_999_999 => "lt_1b",
         1_000_000_000..=1_999_999_999 => "1b_2b",
         2_000_000_000..=4_999_999_999 => "2b_5b",
         5_000_000_000..=7_999_999_999 => "5b_8b",

@@ -1,6 +1,6 @@
 [package]
 name = "teloxide-antispam"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 license = "MIT"
 description = "Shared anti-spam core for teloxide-based community bots: text utils, profile/message scoring signals, external reputation clients"
@@ -10,15 +10,16 @@ keywords = ["telegram", "teloxide", "antispam", "moderation"]
 categories = ["text-processing"]
 
 [features]
-default = ["scoring", "classifier"]
+default = ["scoring", "classifier", "embedding"]
 unicode = ["dep:regex", "dep:unicode-normalization", "dep:unicode-properties", "dep:unicode-script"]
 classifier = ["unicode", "dep:anyhow"]
+embedding = ["dep:anyhow"]
 scoring = ["unicode", "dep:anyhow", "dep:chrono"]
 cas = ["dep:reqwest", "dep:tracing"]
 
 [[example]]
 name = "score_text"
-required-features = ["classifier"]
+required-features = ["classifier", "embedding"]
 
 [lib]
 name = "teloxide_antispam"
@@ -35,3 +36,6 @@ regex = { version = "1", optional = true }
 unicode-normalization = { version = "=0.1.25", optional = true }
 unicode-properties = { version = "=0.1.4", default-features = false, features = ["general-category"], optional = true }
 unicode-script = { version = "=0.5.8", optional = true }
+
+[dev-dependencies]
+base64 = "0.22"

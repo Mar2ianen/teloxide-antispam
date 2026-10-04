@@ -78,7 +78,10 @@ pub fn prepare_text(text: &str) -> PreparedText {
     for ch in text.chars() {
         flags.format_chars += usize::from(ch.general_category() == GeneralCategory::Format);
         flags.bidi_controls += usize::from(is_bidi_control(ch));
-        flags.non_ascii_whitespace += usize::from(is_whitespace(ch) && !ch.is_ascii());
+        // Unusual whitespace: anything beyond plain space/tab/newline/CR,
+        // including ASCII separators (U+001C-U+001F) and non-ASCII spaces.
+        flags.non_ascii_whitespace +=
+            usize::from(is_whitespace(ch) && !matches!(ch, ' ' | '\t' | '\n' | '\r'));
     }
     let compatibility: String = text.nfkc().collect();
     flags.nfkc_changed = compatibility != text;
@@ -103,6 +106,8 @@ fn remove_invisibles(text: &str, flags: &mut TextObservations) -> String {
     for (index, &ch) in chars.iter().enumerate() {
         let previous = index.checked_sub(1).and_then(|i| chars.get(i)).copied();
         let next = chars.get(index + 1).copied();
+        // v2 scope: lone ZWJ handling stays as-is for model-view parity.
+        // Tightening this changes canonical text and needs a v3 retrain.
         if ch == '\u{200d}'
             && !previous.is_some_and(is_alphanumeric)
             && !next.is_some_and(is_alphanumeric)
@@ -140,6 +145,8 @@ fn remove_stacked_marks(text: &str, flags: &mut TextObservations) -> String {
             .iter()
             .filter(|&&ch| !is_variation_selector(ch))
             .count();
+        // v2 scope: single-mark runs stay attached for parity (NFKC already
+        // composes и+breve into й). Dangling-mark stripping needs v3.
         if ordinary >= 2 {
             flags.removed_stacked_marks += ordinary;
             output.extend(
@@ -169,10 +176,22 @@ fn normalize_word(word: &str, flags: &mut TextObservations) -> String {
         .iter()
         .filter_map(|&(ch, script)| matches!(script, Script::Latin | Script::Greek).then_some(ch))
         .collect();
+    // Any second script counts as mixed (Han, Armenian, ...), but homoglyph
+    // repair stays v2-conservative: Latin/Greek <-> Cyrillic table only.
+    // A Latin-majority token with a Greek letter keeps the v2 mapping
+    // direction; changing it needs a v3 preprocessing version + retrain.
+    let mut distinct: Vec<&'static str> = scripts
+        .iter()
+        .map(|&(_, script)| script.short_name())
+        .collect();
+    distinct.sort_unstable();
+    distinct.dedup();
+    if distinct.len() >= 2 {
+        flags.mixed_script_words += 1;
+    }
     if cyrillic.is_empty() || foreign.is_empty() {
         return word.to_owned();
     }
-    flags.mixed_script_words += 1;
     let all_latin_or_cyrillic = scripts
         .iter()
         .all(|&(_, s)| matches!(s, Script::Latin | Script::Cyrillic));
@@ -276,6 +295,8 @@ fn is_bidi_control(ch: char) -> bool {
 }
 
 fn is_variation_selector(ch: char) -> bool {
+    // v2 scope: only FE0E/FE0F word selectors. FE00-FE0D and E0100-E01EF are
+    // known gaps, deferred to a v3 preprocessing version with retraining.
     matches!(ch, '\u{fe0e}' | '\u{fe0f}')
 }
 

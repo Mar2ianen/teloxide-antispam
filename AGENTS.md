@@ -6,7 +6,7 @@ loading, persistence, and Telegram enforcement belong to the consumer.
 
 - Documentation, comments, errors, and commit messages must be in English.
   Non-English strings are allowed for text-processing rules and test inputs.
-- Feature matrix: no-default, unicode, classifier, scoring, cas, default, all.
+- Feature matrix: no-default, unicode, classifier, embedding, scoring, cas, default, all.
 - Before committing: cargo fmt --check, cargo test --all-targets --all-features,
   cargo clippy --all-targets --all-features -- -D warnings, and the feature matrix.
 - Never commit private corpora, moderation exports, credentials, or DSNs.

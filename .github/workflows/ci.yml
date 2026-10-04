@@ -5,7 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        features: [minimal, unicode, classifier, scoring, cas, default, all]
+        features: [minimal, unicode, classifier, embedding, scoring, cas, default, all]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -13,6 +13,7 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all -- --check
+      - run: python3 -m pip install numpy scikit-learn
       - run: python3 -m unittest discover -s tools -p 'test_*.py'
       - shell: bash
         run: |

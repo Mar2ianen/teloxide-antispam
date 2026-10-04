@@ -22,50 +22,88 @@ pub fn normalize_ai_markers(text: &str) -> String {
         .to_string()
 }
 
-/// Replaces Latin letters visually indistinguishable from Cyrillic ones, but
-/// only in mixed Cyrillic/Latin text. Pure Latin identifiers stay unchanged.
+/// Map Latin confusables to Cyrillic only inside tokens that already
+/// contain Cyrillic. Pure Latin tokens (brands, tickers, commands) stay
+/// unchanged so `OpenAI` is not corrupted by a Cyrillic word elsewhere.
 pub fn normalize_cyrillic_homoglyphs(text: &str) -> String {
-    if !text.chars().any(|ch| matches!(ch, '\u{0400}'..='\u{04ff}')) {
-        return text.to_string();
+    let mut output = String::with_capacity(text.len());
+    let mut token = String::new();
+    let flush = |token: &mut String, output: &mut String| {
+        if token
+            .chars()
+            .any(|ch| matches!(ch, '\u{0400}'..='\u{04ff}'))
+        {
+            for ch in std::mem::take(token).chars() {
+                output.push(match ch {
+                    'A' => 'А',
+                    'B' => 'В',
+                    'C' => 'С',
+                    'E' => 'Е',
+                    'H' => 'Н',
+                    'K' => 'К',
+                    'M' => 'М',
+                    'O' => 'О',
+                    'P' => 'Р',
+                    'T' => 'Т',
+                    'X' => 'Х',
+                    'Y' => 'У',
+                    'a' => 'а',
+                    'c' => 'с',
+                    'e' => 'е',
+                    'o' => 'о',
+                    'p' => 'р',
+                    'x' => 'х',
+                    'y' => 'у',
+                    _ => ch,
+                });
+            }
+        } else {
+            output.push_str(&std::mem::take(token));
+        }
+    };
+    for ch in text.chars() {
+        if ch.is_alphanumeric() {
+            token.push(ch);
+        } else {
+            flush(&mut token, &mut output);
+            output.push(ch);
+        }
     }
-    text.chars()
-        .map(|ch| match ch {
-            'A' => 'А',
-            'B' => 'В',
-            'C' => 'С',
-            'E' => 'Е',
-            'H' => 'Н',
-            'K' => 'К',
-            'M' => 'М',
-            'O' => 'О',
-            'P' => 'Р',
-            'T' => 'Т',
-            'X' => 'Х',
-            'Y' => 'У',
-            'a' => 'а',
-            'c' => 'с',
-            'e' => 'е',
-            'o' => 'о',
-            'p' => 'р',
-            'x' => 'х',
-            'y' => 'у',
-            _ => ch,
-        })
-        .collect()
+    flush(&mut token, &mut output);
+    output
 }
 
 pub fn has_mixed_script_homoglyphs(text: &str) -> bool {
     normalize_cyrillic_homoglyphs(text) != text
 }
 
+fn is_url_token(trimmed: &str) -> bool {
+    let lower = trimmed.to_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
 pub fn strip_links(text: &str) -> String {
     text.split_whitespace()
-        .filter(|word| {
+        .filter_map(|word| {
             let trimmed = word.trim_matches(|ch: char| {
                 ch.is_ascii_punctuation()
                     || matches!(ch, '«' | '»' | '“' | '”' | '„' | '‹' | '›' | '【' | '】')
             });
-            !trimmed.starts_with("http://") && !trimmed.starts_with("https://")
+            if is_url_token(trimmed) {
+                return None;
+            }
+            // Glued text such as `look(https://example.com)`: drop the URL
+            // part, keep the readable prefix when it exists.
+            let lower = trimmed.to_lowercase();
+            let marker = lower.find("http://").or_else(|| lower.find("https://"));
+            if let Some(index) = marker {
+                let prefix = trimmed[..index].trim_matches(|ch: char| {
+                    ch.is_ascii_punctuation()
+                        || matches!(ch, '«' | '»' | '“' | '”' | '„' | '‹' | '›' | '【' | '】')
+                });
+                return (!prefix.is_empty()).then(|| prefix.to_string());
+            }
+            Some(word.to_string())
         })
         .collect::<Vec<_>>()
         .join(" ")
@@ -153,6 +191,15 @@ mod tests {
         assert_eq!(normalize_cyrillic_homoglyphs("Tанюша"), "Танюша");
         assert!(has_mixed_script_homoglyphs("Tанюша"));
         assert_eq!(normalize_cyrillic_homoglyphs("Alice"), "Alice");
+    }
+
+    #[test]
+    fn pure_latin_brand_survives_cyrillic_context() {
+        assert_eq!(
+            normalize_cyrillic_homoglyphs("Привет OpenAI"),
+            "Привет OpenAI"
+        );
+        assert!(!has_mixed_script_homoglyphs("Привет OpenAI"));
     }
 
     #[test]

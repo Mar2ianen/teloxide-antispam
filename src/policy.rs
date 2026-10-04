@@ -24,8 +24,22 @@ pub enum AutoAction {
     Ban,
 }
 
+impl AutoPolicy {
+    /// Fails when ban is below review: such a policy would ban accounts
+    /// that do not even reach review. Consumers should fix config;
+    /// `decide_auto_action` stays fail-closed for invalid policies.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if self.review_threshold > self.ban_threshold {
+            return Err("ban threshold must be at or above review threshold");
+        }
+        Ok(())
+    }
+}
+
 pub fn decide_auto_action(score: i32, policy: &AutoPolicy) -> AutoAction {
-    if score >= policy.ban_threshold {
+    // Require review for any action: an inverted policy (ban < review)
+    // must never ban below the review threshold.
+    if score >= policy.ban_threshold && score >= policy.review_threshold {
         AutoAction::Ban
     } else if score >= policy.review_threshold {
         AutoAction::DeleteMessages
@@ -66,5 +80,16 @@ mod tests {
     fn ban_threshold_bans() {
         assert_eq!(decide_auto_action(90, &policy()), AutoAction::Ban);
         assert_eq!(decide_auto_action(100, &policy()), AutoAction::Ban);
+    }
+
+    #[test]
+    fn inverted_policy_never_bans_below_review() {
+        let inverted = AutoPolicy {
+            review_threshold: 90,
+            ban_threshold: 70,
+        };
+        assert!(inverted.validate().is_err());
+        assert_eq!(decide_auto_action(80, &inverted), AutoAction::None);
+        assert_eq!(decide_auto_action(95, &inverted), AutoAction::Ban);
     }
 }

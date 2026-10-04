@@ -86,3 +86,19 @@ For the Rust v2 artifact:
 Keep automatic enforcement disabled until separately validated on an
 independently adjudicated, profile-aware local holdout. A strong text score is
 supporting evidence, never standalone permission to ban an account.
+
+## Embedding multitask heads
+
+Encode texts with the frozen production encoder (record its exact model
+version, e.g. `embeddinggemma-q4-768-v1`) and store vectors privately
+alongside adjudicated binary labels and category names. L2-normalize the
+same way at train and inference time (`normalize: true` unless the encoder
+already emits unit vectors). Fit one logistic head for spam and one per
+observed category with `tools/train_embedding_multitask.py`; unseen
+categories export as silent constant heads. Validate vector dim, finiteness,
+and class coverage before export, then compare Python probabilities against
+the Rust `score_text` harness with base64 `embedding` rows. Select
+supporting thresholds with `tools/calibrate.py` on validation only, exactly
+as for the text model. Category heads route review and explain verdicts;
+they never add points. Publish head weights and versions, never the
+underlying vectors, texts, or labels.

@@ -10,13 +10,14 @@ the consuming application's responsibility.
 
 | Feature | Functionality |
 |---|---|
-| No defaults | Text helpers, calibration, action policy, CAS response parsing |
+| No defaults | Text helpers, calibration, categories taxonomy, action policy, CAS response parsing |
 | `unicode` | Versioned Unicode model view and word/character tokenization |
 | `classifier` | TF-IDF/LogReg v1/v2 loading and inference; enables `unicode` |
+| `embedding` | Frozen-encoder linear heads: binary spam plus multilabel categories |
 | `scoring` | Assessment, profile/ID/channel signals, component scoring; enables `unicode` |
 | `cas` | Optional CAS HTTP lookup; no networking dependency otherwise |
 
-Default features: `scoring`, `classifier`. Minimal classifier integration:
+Default features: `scoring`, `classifier`, `embedding`. Minimal classifier integration:
 
 ```toml
 teloxide-antispam = { git = "https://github.com/Mar2ianen/teloxide-antispam", tag = "v0.2.0", default-features = false, features = ["classifier"] }
@@ -51,7 +52,9 @@ JSONL parity harness (`id` and `text` on stdin):
 cargo run --example score_text -- path/to/model.json
 ```
 
-Without a model argument it outputs preprocessing only. No Telegram or SQL
+Without a model argument it outputs preprocessing only. With a text model
+and an embedding head it also outputs `embedding_probability` and a
+`fused_probability` (equal-weight logit fusion). No Telegram or SQL
 requests are made. Models and private corpora are not embedded in the library.
 For the ported v2 candidate, Python/Rust parity was checked on 32,253 texts:
 zero model-view differences and maximum probability error 3.11e-15. This is
@@ -80,6 +83,35 @@ two false positives with a floor of 0.9; strong requires zero false positives.
 Test is used exclusively for reporting. Zero errors on a small holdout do not
 establish FPR ≤0.0001%. Consumers still need an independently adjudicated,
 temporal, author/campaign-separated, profile-aware local holdout.
+
+## Categories and embedding heads
+
+`categories` defines the stable append-only taxonomy: `job_scam`,
+`finance_crypto_promo`, `adult_funnel`, `vpn_promo`, `direct_dm_funnel`,
+`external_promo`. Scores are independent probabilities, not a softmax.
+Categories are observation-only: they route review and explain a verdict,
+they never add points or authorize a ban. Without a trained head, scoring
+reports heuristic `suspected_categories` names from assessment markers;
+names are not probabilities and must not be treated as learned outputs.
+
+`embedding` scores frozen encoder vectors (e.g. EmbeddingGemma) with a
+versioned linear layer per head: one binary spam head plus optional
+per-category heads. The encoder runs outside this library; only the heads
+are learned here. In scoring, text and embedding heads share a single
+supporting slot via `max()`, so two weak models cannot stack into a ban.
+`fuse_probabilities` offers an alternative equal-footing logit combiner for
+offline analysis. Train heads with:
+
+```sh
+python3 tools/train_embedding_multitask.py rows.jsonl --dim 768 \
+  --embedding-model embeddinggemma-q4-768-v1 --version my-head-v1 \
+  --output head.json
+```
+
+Input rows are private (`embedding` floats or base64 f32, `label` 0/1,
+optional `categories` names). Keep datasets, exports, and per-example
+predictions out of Git; publish the head weights, versions, aggregate
+metrics, and methodology instead.
 
 ## Development
 

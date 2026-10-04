@@ -7,6 +7,9 @@
 #[cfg(feature = "scoring")]
 pub mod assessment;
 pub mod calibration;
+pub mod categories;
+#[cfg(feature = "embedding")]
+pub mod embedding;
 pub mod external;
 #[cfg(feature = "classifier")]
 pub mod logreg;

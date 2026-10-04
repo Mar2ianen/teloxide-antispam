@@ -6,6 +6,7 @@ use crate::assessment::{
     SelfReferenceGrammar,
 };
 use crate::calibration::LinearScoreCalibration;
+use crate::categories::{CategoryScores, SpamCategory};
 use crate::external::EXTERNAL_SCORE_CAP;
 use crate::preprocess::{PREPROCESSING_VERSION, TextObservations};
 use crate::text::normalize_channel_evidence;
@@ -32,6 +33,14 @@ pub struct FirstMessageScoreContext {
     pub linear_spam_probability: Option<f64>,
     pub linear_spam_model_version: Option<String>,
     pub linear_spam_calibration: Option<LinearScoreCalibration>,
+    /// Frozen-encoder spam probability (`embedding` module).
+    /// `None` when the consumer has no head or the vector was unusable.
+    pub embedding_spam_probability: Option<f64>,
+    pub embedding_model_version: Option<String>,
+    pub embedding_calibration: Option<LinearScoreCalibration>,
+    /// Trained multilabel categories. Heuristic marker mapping is reported
+    /// separately as names, never as fake probabilities.
+    pub category_scores: Option<CategoryScores>,
     /// Audit observations only: no points and no decisive decision-tree leaf.
     pub text_observations: Option<TextObservations>,
 }
@@ -269,28 +278,42 @@ fn score_first_message(
     } else {
         0
     };
+    let valid_similarity = context
+        .spam_similarity
+        .filter(|value| value.is_finite() && (0.0..=1.0).contains(value));
     let template_score = i32::from(context.template_matches > 0) * 24;
-    let embedding_score = match context.spam_similarity {
+    let embedding_score = match valid_similarity {
         Some(value) if value >= 0.88 => 20,
         Some(value) if value >= 0.78 => 10,
         _ => 0,
     };
     let persona_score = i32::from(performative_feminine_persona) * 12;
-    // The consumer selects the model version. Its score is supporting only;
-    // normalization/obfuscation never authorizes enforcement on its own.
-    let calibration = context.linear_spam_calibration.clone().unwrap_or_default();
-    let linear_score = calibration.score(context.linear_spam_probability);
+    // The consumer selects the model version. Text and embedding heads are
+    // supporting only; either can reach the strong band, but they share one
+    // capped slot via max() so two weak models cannot stack into a ban.
+    let text_calibration = context.linear_spam_calibration.clone().unwrap_or_default();
+    let valid_text_probability = context
+        .linear_spam_probability
+        .filter(|p| p.is_finite() && (0.0..=1.0).contains(p));
+    let valid_embedding_probability = context
+        .embedding_spam_probability
+        .filter(|p| p.is_finite() && (0.0..=1.0).contains(p));
+    let embedding_calibration = context
+        .embedding_calibration
+        .clone()
+        .unwrap_or_else(|| text_calibration.clone());
+    let ml_score = text_calibration
+        .score(valid_text_probability)
+        .max(embedding_calibration.score(valid_embedding_probability));
     let grammar_conflict = context.feminine_profile_name
         && assessment.self_reference_grammar == SelfReferenceGrammar::Masculine
         && assessment.profile_name_grammar_relation == ProfileNameGrammarRelation::Conflicts;
     let grammar_score = i32::from(grammar_conflict) * 10;
     let rkn_vpn_score = if rkn_vpn_promotion { 35 } else { 0 };
     let known_campaign_match = context.template_matches > 0
-        || context
-            .spam_similarity
-            .is_some_and(|similarity| similarity >= 0.88);
+        || valid_similarity.is_some_and(|similarity| similarity >= 0.88);
     let supporting_score =
-        llm_score + template_score + embedding_score + persona_score + linear_score + grammar_score;
+        llm_score + template_score + embedding_score + persona_score + ml_score + grammar_score;
     let decisive = rkn_vpn_promotion
         || decisive_direct_dm_funnel
         || decisive_external_promo_funnel
@@ -300,7 +323,7 @@ fn score_first_message(
     let review_floor = review_threshold
         .clamp(0, 100)
         .saturating_sub(score_before_message);
-    let available_score = 100_i32.saturating_sub(score_before_message);
+    let available_score = 100_i32.saturating_sub(score_before_message).max(0);
     let score = if decisive {
         capped_score.max(review_floor).min(available_score)
     } else {
@@ -354,9 +377,11 @@ fn score_first_message(
             "warning_strength": if decisive || score >= 30 { "strong" } else { "supporting" },
             "assessment": assessment,
             "template_matches": context.template_matches,
-            "spam_similarity": context.spam_similarity,
-            "linear_spam_probability": context.linear_spam_probability,
+            "spam_similarity": valid_similarity,
+            "linear_spam_probability": valid_text_probability,
             "linear_spam_model_version": context.linear_spam_model_version,
+            "embedding_spam_probability": valid_embedding_probability,
+            "embedding_model_version": context.embedding_model_version,
         });
         if let Some(path) = decision_tree_path {
             signal["decision_tree_version"] = json!(FIRST_MESSAGE_DECISION_TREE_VERSION);
@@ -364,7 +389,15 @@ fn score_first_message(
         }
         signals.push(signal);
     }
-    if context.linear_spam_probability.is_some()
+    let valid_categories = context
+        .category_scores
+        .as_ref()
+        .filter(|scores| scores.validate().is_ok());
+    let suspected = suspected_categories(assessment);
+    if valid_text_probability.is_some()
+        || valid_embedding_probability.is_some()
+        || valid_categories.is_some()
+        || !suspected.is_empty()
         || context
             .text_observations
             .as_ref()
@@ -375,14 +408,62 @@ fn score_first_message(
             "label": "first_message_text_observation",
             "coefficient": 0,
             "decision": "observation_only",
-            "linear_spam_calibration": calibration,
-            "linear_spam_probability": context.linear_spam_probability,
+            "linear_spam_calibration": text_calibration,
+            "linear_spam_probability": valid_text_probability,
             "linear_spam_model_version": context.linear_spam_model_version,
+            "embedding_spam_probability": valid_embedding_probability,
+            "embedding_model_version": context.embedding_model_version,
+            "embedding_calibration": embedding_calibration,
+            "category_scores": context.category_scores,
+            "suspected_categories": suspected,
             "text_preprocessing_version": PREPROCESSING_VERSION,
             "text_observations": context.text_observations,
         }));
     }
     (score, Value::Array(signals))
+}
+
+/// Heuristic marker-to-category names for review routing. Names only, never
+/// probabilities: a trained `category_scores` head reports its own version.
+fn suspected_categories(assessment: &FirstMessageAssessment) -> Vec<&'static str> {
+    let mut categories = Vec::new();
+    let mut push = |marker: FirstMessageRiskMarker, category: SpamCategory| {
+        if assessment.risk_markers.contains(&marker) {
+            let name = category.as_str();
+            if !categories.contains(&name) {
+                categories.push(name);
+            }
+        }
+    };
+    push(
+        FirstMessageRiskMarker::PaidEasyTaskOffer,
+        SpamCategory::JobScam,
+    );
+    push(
+        FirstMessageRiskMarker::SelfHelpOrFinancePromo,
+        SpamCategory::FinanceCryptoPromo,
+    );
+    push(
+        FirstMessageRiskMarker::RknRelatedVpnPromotion,
+        SpamCategory::VpnPromo,
+    );
+    push(
+        FirstMessageRiskMarker::DirectMessages,
+        SpamCategory::DirectDmFunnel,
+    );
+    push(
+        FirstMessageRiskMarker::SendOrShareOffer,
+        SpamCategory::DirectDmFunnel,
+    );
+    push(
+        FirstMessageRiskMarker::MaskedCallToAction,
+        SpamCategory::DirectDmFunnel,
+    );
+    push(
+        FirstMessageRiskMarker::ExternalPromoFunnel,
+        SpamCategory::ExternalPromo,
+    );
+    categories
 }
 
 fn score_avatar(avatar: &crate::assessment::AvatarObservation) -> (i32, Value) {
@@ -657,6 +738,179 @@ mod tests {
                 .unwrap()
                 > 0
         );
+    }
+
+    #[test]
+    fn invalid_similarity_and_probability_are_sanitized() {
+        let assessment = assessment(
+            r#"{
+                "relation_to_chat":"on_topic", "direct_dm_offer":false,
+                "offtopic_promo":false, "template_campaign":false,
+                "self_reference_grammar":"none_or_unclear",
+                "profile_name_grammar_relation":"not_applicable",
+                "risk_markers":[], "evidence":[],
+                "summary":"Обычный вопрос.", "confidence":0.9
+            }"#,
+            "null",
+        );
+        for bad in [f64::NAN, f64::INFINITY, 1.5, -0.1] {
+            let components = score_assessment(
+                0,
+                json!([]),
+                &assessment,
+                FirstMessageScoreContext {
+                    spam_similarity: Some(bad),
+                    linear_spam_probability: Some(bad),
+                    ..Default::default()
+                },
+                70,
+            );
+            assert_eq!(components.first_message_score, 0, "bad value: {bad}");
+            assert!(
+                components
+                    .first_message_signals
+                    .as_array()
+                    .is_none_or(|signals| signals.is_empty()),
+                "invalid evidence must stay silent: {bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn saturated_baseline_never_yields_negative_message_score() {
+        let assessment = assessment(
+            r#"{
+                "relation_to_chat":"off_topic", "direct_dm_offer":true,
+                "offtopic_promo":true, "template_campaign":true,
+                "self_reference_grammar":"masculine",
+                "profile_name_grammar_relation":"conflicts",
+                "risk_markers":["paid_easy_task_offer","performative_feminine_persona"], "evidence":[],
+                "summary":"Реклама.", "confidence":0.9
+            }"#,
+            "null",
+        );
+        let components = score_assessment(
+            100,
+            json!([{"label": "suggestive_avatar"}]),
+            &assessment,
+            FirstMessageScoreContext {
+                feminine_profile_name: true,
+                linear_spam_probability: Some(0.99),
+                ..Default::default()
+            },
+            70,
+        );
+        assert!(components.first_message_score >= 0);
+    }
+
+    #[test]
+    fn embedding_and_text_share_one_supporting_slot() {
+        let assessment = assessment(
+            r#"{
+                "relation_to_chat":"on_topic", "direct_dm_offer":false,
+                "offtopic_promo":false, "template_campaign":false,
+                "self_reference_grammar":"none_or_unclear",
+                "profile_name_grammar_relation":"not_applicable",
+                "risk_markers":[], "evidence":[],
+                "summary":"Обычный вопрос.", "confidence":0.9
+            }"#,
+            "null",
+        );
+        let text_only = score_assessment(
+            0,
+            json!([]),
+            &assessment,
+            FirstMessageScoreContext {
+                linear_spam_probability: Some(0.95),
+                ..Default::default()
+            },
+            70,
+        );
+        let both = score_assessment(
+            0,
+            json!([]),
+            &assessment,
+            FirstMessageScoreContext {
+                linear_spam_probability: Some(0.95),
+                embedding_spam_probability: Some(0.95),
+                embedding_model_version: Some("test-encoder-3".to_owned()),
+                ..Default::default()
+            },
+            70,
+        );
+        assert_eq!(text_only.first_message_score, 18);
+        assert_eq!(both.first_message_score, 18);
+        let observation = both
+            .first_message_signals
+            .as_array()
+            .expect("observation signal must exist");
+        assert_eq!(observation[0]["embedding_spam_probability"], 0.95);
+    }
+
+    #[test]
+    fn trained_categories_are_observation_only() {
+        let plain = assessment(
+            r#"{
+                "relation_to_chat":"on_topic", "direct_dm_offer":false,
+                "offtopic_promo":false, "template_campaign":false,
+                "self_reference_grammar":"none_or_unclear",
+                "profile_name_grammar_relation":"not_applicable",
+                "risk_markers":[], "evidence":[],
+                "summary":"Обычный вопрос.", "confidence":0.9
+            }"#,
+            "null",
+        );
+        let components = score_assessment(
+            0,
+            json!([]),
+            &plain,
+            FirstMessageScoreContext {
+                category_scores: Some(crate::categories::CategoryScores {
+                    version: "test-v1".to_owned(),
+                    scores: vec![crate::categories::CategoryScore {
+                        category: crate::categories::SpamCategory::JobScam,
+                        probability: 0.99,
+                    }],
+                }),
+                ..Default::default()
+            },
+            70,
+        );
+        assert_eq!(components.first_message_score, 0);
+        let observation = &components.first_message_signals[0];
+        assert_eq!(observation["decision"], "observation_only");
+        assert_eq!(observation["category_scores"]["version"], "test-v1");
+        assert_eq!(
+            observation["category_scores"]["scores"][0]["probability"],
+            0.99
+        );
+
+        let marked = assessment(
+            r#"{
+                "relation_to_chat":"on_topic", "direct_dm_offer":false,
+                "offtopic_promo":false, "template_campaign":false,
+                "self_reference_grammar":"none_or_unclear",
+                "profile_name_grammar_relation":"not_applicable",
+                "risk_markers":["paid_easy_task_offer"], "evidence":[],
+                "summary":"Обычный вопрос.", "confidence":0.9
+            }"#,
+            "null",
+        );
+        let routed = score_assessment(
+            0,
+            json!([]),
+            &marked,
+            FirstMessageScoreContext::default(),
+            70,
+        );
+        let observation = routed
+            .first_message_signals
+            .as_array()
+            .expect("observation signal must exist")
+            .iter()
+            .find(|signal| signal["label"] == "first_message_text_observation")
+            .expect("heuristic names ride the observation signal");
+        assert_eq!(observation["suspected_categories"], json!(["job_scam"]));
     }
 
     #[test]

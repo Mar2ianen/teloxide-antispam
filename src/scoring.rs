@@ -325,8 +325,16 @@ fn score_first_message(
         && assessment.profile_name_grammar_relation == ProfileNameGrammarRelation::Conflicts;
     let grammar_score = i32::from(grammar_conflict) * 10;
     let rkn_vpn_score = if rkn_vpn_promotion { 35 } else { 0 };
-    let known_campaign_match = context.template_matches > 0
-        || valid_similarity.is_some_and(|similarity| similarity >= 0.88);
+    let similarity_match = valid_similarity.is_some_and(|similarity| similarity >= 0.88);
+    // Чистый embedding-match без подтверждения LLM-маркерами — только
+    // supporting сигнал: раньше он один взводил decisive и дотягивал скор до
+    // review floor, давая карточки на доброкачественные on-topic сообщения.
+    let corroborated_similarity = similarity_match
+        && (!assessment.risk_markers.is_empty()
+            || assessment.direct_dm_offer
+            || off_topic_promo
+            || assessment.template_campaign);
+    let known_campaign_match = context.template_matches > 0 || corroborated_similarity;
     let supporting_score = llm_score
         + template_score
         + embedding_score
@@ -1198,6 +1206,73 @@ mod tests {
         assert_eq!(
             components.first_message_signals[0]["decision_tree_version"],
             FIRST_MESSAGE_DECISION_TREE_VERSION
+        );
+    }
+
+    #[test]
+    fn uncorroborated_embedding_similarity_stays_supporting() {
+        let assessment = assessment(
+            r#"{
+                "relation_to_chat":"on_topic", "direct_dm_offer":false,
+                "offtopic_promo":false, "template_campaign":false,
+                "self_reference_grammar":"none_or_unclear",
+                "profile_name_grammar_relation":"not_applicable",
+                "risk_markers":[], "evidence":[],
+                "summary":"Обычное сообщение.", "confidence":0.9
+            }"#,
+            "null",
+        );
+        let components = score_assessment(
+            0,
+            json!([]),
+            &assessment,
+            FirstMessageScoreContext {
+                spam_similarity: Some(0.9),
+                ..Default::default()
+            },
+            REVIEW_RISK_THRESHOLD,
+        );
+
+        assert!(components.final_score() < REVIEW_RISK_THRESHOLD);
+        assert_eq!(components.final_level(), "low");
+        assert!(
+            components
+                .first_message_signals
+                .as_array()
+                .is_none_or(|signals| signals
+                    .iter()
+                    .all(|signal| signal["label"] != "known_spam_campaign_match"))
+        );
+    }
+
+    #[test]
+    fn corroborated_embedding_similarity_reaches_review_threshold() {
+        let assessment = assessment(
+            r#"{
+                "relation_to_chat":"on_topic", "direct_dm_offer":false,
+                "offtopic_promo":false, "template_campaign":true,
+                "self_reference_grammar":"none_or_unclear",
+                "profile_name_grammar_relation":"not_applicable",
+                "risk_markers":[], "evidence":[],
+                "summary":"Шаблонная реакция.", "confidence":0.9
+            }"#,
+            "null",
+        );
+        let components = score_assessment(
+            0,
+            json!([]),
+            &assessment,
+            FirstMessageScoreContext {
+                spam_similarity: Some(0.9),
+                ..Default::default()
+            },
+            REVIEW_RISK_THRESHOLD,
+        );
+
+        assert_eq!(components.final_score(), REVIEW_RISK_THRESHOLD);
+        assert_eq!(
+            components.first_message_signals[0]["label"],
+            "known_spam_campaign_match"
         );
     }
 

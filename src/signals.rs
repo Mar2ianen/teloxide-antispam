@@ -77,6 +77,8 @@ pub struct NewUserFeatures {
     pub username: Option<String>,
     pub username_reuse_count: i64,
     pub username_reuse_spammer_count: i64,
+    /// Current confirmed label supplied by the consumer, independent of bans.
+    pub local_spammer_identity: bool,
     pub shared_spammer_identity: bool,
     pub lols_spammer_identity: bool,
     pub first_name: Option<String>,
@@ -317,7 +319,8 @@ pub fn analyze_risk(
     config: &NewUserAnalysisConfig,
     is_old_active_user: bool,
 ) -> RiskAnalysis {
-    match is_old_active_user {
+    let confirmed_identity = features.local_spammer_identity || features.shared_spammer_identity;
+    match is_old_active_user && !confirmed_identity {
         true => old_active_user_risk(),
         false => analyze_new_or_low_activity_user(features, config),
     }
@@ -342,7 +345,13 @@ pub fn analyze_new_or_low_activity_user(
     let username_stats = username_stats(features.username.as_deref());
     let mut risk = RiskAccumulator::default();
 
-    risk.add_optional(shared_spammer_signal(features.shared_spammer_identity));
+    // Local and shared labels may describe the same confirmation. Count that
+    // identity once, preferring the consumer's current local decision.
+    risk.add_optional(if features.local_spammer_identity {
+        local_spammer_signal(true)
+    } else {
+        shared_spammer_signal(features.shared_spammer_identity)
+    });
     risk.add_optional(lols_spammer_signal(features.lols_spammer_identity));
     risk.add_optional(message_count_signal(features));
     risk.add_optional(link_signal(features));
@@ -709,6 +718,15 @@ fn shared_spammer_signal(is_shared_spammer: bool) -> Option<RiskSignal> {
         coefficient: 70,
         label: "shared_spammer_identity",
         reason: "Telegram user id was confirmed as spam in another bot instance",
+    })
+}
+
+fn local_spammer_signal(is_local_spammer: bool) -> Option<RiskSignal> {
+    is_local_spammer.then_some(RiskSignal {
+        class: SpamClass::KnownSpammer,
+        coefficient: 70,
+        label: "local_spammer_identity",
+        reason: "Telegram user id currently has a confirmed local spam label",
     })
 }
 
@@ -2145,6 +2163,64 @@ mod tests {
         assert_eq!(signal.coefficient, 70);
         assert_eq!(signal.label, "shared_spammer_identity");
         assert!(shared_spammer_signal(false).is_none());
+    }
+
+    #[test]
+    fn local_spammer_identity_adds_seventy_points_without_suppressing_analysis() {
+        let features = NewUserFeatures {
+            message_count: 100,
+            link_count: 1,
+            ..Default::default()
+        };
+        let config = NewUserAnalysisConfig::default();
+        let clean = analyze_risk(&features, &config, false);
+        let labeled = NewUserFeatures {
+            local_spammer_identity: true,
+            ..features
+        };
+        let risk = analyze_risk(&labeled, &config, true);
+        assert_eq!(risk.score, (clean.score + 70).min(100));
+        assert!(
+            risk.labels
+                .iter()
+                .any(|label| label == "local_spammer_identity")
+        );
+        assert!(
+            risk.labels
+                .iter()
+                .any(|label| label == "chat_message_has_link")
+        );
+        assert!(!risk.labels.iter().any(|label| label == "old_active_user"));
+        assert!(local_spammer_signal(false).is_none());
+    }
+
+    #[test]
+    fn local_and_shared_confirmations_do_not_double_count_identity() {
+        let local = NewUserFeatures {
+            local_spammer_identity: true,
+            ..Default::default()
+        };
+        let config = NewUserAnalysisConfig::default();
+        let local_risk = analyze_risk(&local, &config, false);
+        let both = NewUserFeatures {
+            shared_spammer_identity: true,
+            ..local
+        };
+        let both_risk = analyze_risk(&both, &config, false);
+        assert_eq!(local_risk.score, both_risk.score);
+        assert_eq!(local_risk.signals, both_risk.signals);
+    }
+
+    #[test]
+    fn removed_local_label_restores_existing_active_user_baseline() {
+        let features = NewUserFeatures {
+            local_spammer_identity: false,
+            message_count: 100,
+            ..Default::default()
+        };
+        let risk = analyze_risk(&features, &NewUserAnalysisConfig::default(), true);
+        assert_eq!(risk.score, 0);
+        assert_eq!(risk.labels, vec!["old_active_user"]);
     }
 
     #[test]

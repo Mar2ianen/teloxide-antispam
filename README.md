@@ -30,6 +30,11 @@ returns a proposed action without deleting messages or banning accounts.
 The inherited baseline policy is heuristic; consumers must validate it for
 their own community instead of treating it as a universal calibrated detector.
 
+`NewUserFeatures::local_spammer_identity` represents a current confirmed local
+label, not a Telegram ban. It adds 70 baseline points and keeps profile/message
+analysis enabled even for an established participant. Local and shared identity
+confirmations count once; clearing the local label removes its contribution.
+
 ## Text models
 
 `logreg::load_model` distinguishes legacy `word_12_lower` from

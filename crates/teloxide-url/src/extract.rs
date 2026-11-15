@@ -19,11 +19,19 @@ pub enum Kind {
     BotCommand,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    VisibleText,
+    TelegramEntity,
+    RichMessage,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Found {
     /// URL target or literal mention/tag/command. Never auto-follow or log unredacted.
     pub value: String,
     pub kind: Kind,
+    pub source: Source,
     /// Byte range within the original visible text; absent for hidden/Rich targets.
     pub span: Option<Range<usize>>,
     /// Display text for links whose actual URL differs from what the user sees.
@@ -35,6 +43,7 @@ impl Found {
         Self {
             value: value.into(),
             kind,
+            source: Source::VisibleText,
             span: None,
             label: None,
         }
@@ -84,6 +93,7 @@ pub fn find_urls(text: &str) -> Vec<Found> {
         result.push(Found {
             value: raw.to_owned(),
             kind: Kind::Url,
+            source: Source::VisibleText,
             span: Some(item.start()..item.end()),
             label: None,
         });
@@ -120,6 +130,7 @@ pub fn find_urls(text: &str) -> Vec<Found> {
                 result.push(Found {
                     value: raw.into(),
                     kind: Kind::Url,
+                    source: Source::VisibleText,
                     span: Some(index..end),
                     label: None,
                 });
@@ -154,6 +165,7 @@ pub fn find_urls(text: &str) -> Vec<Found> {
                 result.push(Found {
                     value: raw.into(),
                     kind: Kind::Url,
+                    source: Source::VisibleText,
                     span: Some(index..end),
                     label: None,
                 });
@@ -246,6 +258,7 @@ pub fn find(text: &str) -> Vec<Found> {
         found.push(Found {
             value,
             kind,
+            source: Source::VisibleText,
             span: Some(start..end),
             label: None,
         });

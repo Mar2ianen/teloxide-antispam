@@ -6,7 +6,7 @@ use teloxide::types::{
 };
 
 use crate::extract::MAX_URL_BYTES;
-use crate::{Found, Kind, MAX_ITEMS, find, parse_url, utf16_range};
+use crate::{Found, Kind, MAX_ITEMS, Source, find, parse_url, utf16_range};
 
 const MAX_RICH_NODES: usize = 1024;
 const MAX_RICH_DEPTH: usize = 24;
@@ -54,42 +54,49 @@ pub fn extract_text_entities(text: &str, entities: &[MessageEntity]) -> Vec<Foun
             MessageEntityKind::Url if parse_url(visible).is_some() => Found {
                 value: visible.to_owned(),
                 kind: Kind::Url,
+                source: Source::TelegramEntity,
                 span: Some(span.clone()),
                 label: None,
             },
             MessageEntityKind::TextLink { url } => Found {
                 value: url.as_str().to_owned(),
                 kind: Kind::Url,
+                source: Source::TelegramEntity,
                 span: Some(span.clone()),
                 label: Some(visible.into()),
             },
             MessageEntityKind::Mention => Found {
                 value: visible.into(),
                 kind: Kind::Mention,
+                source: Source::TelegramEntity,
                 span: Some(span.clone()),
                 label: None,
             },
             MessageEntityKind::TextMention { user } => Found {
                 value: visible.into(),
                 kind: Kind::UserId(user.id.0),
+                source: Source::TelegramEntity,
                 span: Some(span.clone()),
                 label: None,
             },
             MessageEntityKind::Hashtag => Found {
                 value: visible.into(),
                 kind: Kind::Hashtag,
+                source: Source::TelegramEntity,
                 span: Some(span.clone()),
                 label: None,
             },
             MessageEntityKind::Cashtag => Found {
                 value: visible.into(),
                 kind: Kind::Cashtag,
+                source: Source::TelegramEntity,
                 span: Some(span.clone()),
                 label: None,
             },
             MessageEntityKind::BotCommand => Found {
                 value: visible.into(),
                 kind: Kind::BotCommand,
+                source: Source::TelegramEntity,
                 span: Some(span.clone()),
                 label: None,
             },
@@ -136,6 +143,7 @@ impl RichWalker {
             self.results.push(Found {
                 value: value.into(),
                 kind,
+                source: Source::RichMessage,
                 span: None,
                 label,
             });
@@ -389,6 +397,7 @@ mod tests {
         let found = extract_text_entities("example", &[entity]);
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].value, "https://evil.example/");
+        assert_eq!(found[0].source, Source::TelegramEntity);
     }
     #[test]
     fn rejects_split_surrogate_offset() {

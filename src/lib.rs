@@ -25,3 +25,7 @@ pub mod text;
 /// Optional standalone URL and Telegram reference parser.
 #[cfg(feature = "url")]
 pub use teloxide_url as url;
+
+/// Advisory URL evidence interpretation; never affects enforcement itself.
+#[cfg(feature = "url")]
+pub mod url_shadow;

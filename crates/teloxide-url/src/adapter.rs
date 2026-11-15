@@ -33,9 +33,7 @@ pub fn extract_from_message(message: &Message) -> Vec<Found> {
         walk.blocks(&media.rich_message.blocks, 0);
         output.extend(walk.results);
     }
-    output.dedup();
-    output.truncate(MAX_ITEMS);
-    output
+    stable_dedup(output)
 }
 
 pub fn extract_text_entities(text: &str, entities: &[MessageEntity]) -> Vec<Found> {
@@ -119,9 +117,20 @@ pub fn extract_text_entities(text: &str, entities: &[MessageEntity]) -> Vec<Foun
     }
     out.extend(native);
     out.sort_by_key(|item| item.span.as_ref().map_or(usize::MAX, |s| s.start));
-    out.dedup();
-    out.truncate(MAX_ITEMS);
-    out
+    stable_dedup(out)
+}
+
+fn stable_dedup(items: Vec<Found>) -> Vec<Found> {
+    let mut unique = Vec::with_capacity(items.len().min(MAX_ITEMS));
+    for item in items {
+        if !unique.contains(&item) {
+            unique.push(item);
+            if unique.len() == MAX_ITEMS {
+                break;
+            }
+        }
+    }
+    unique
 }
 
 #[derive(Default)]
@@ -556,10 +565,18 @@ mod tests {
             "from": {"id": 13, "is_bot": false, "first_name": "Test"},
             "rich_message": {"blocks": [
                 {"type": "paragraph", "text": ["😺", {"type": "url", "url": "https://hidden.example/rich", "text": "open"}]},
+                {"type": "paragraph", "text": {"type": "url", "url": "https://hidden.example/rich", "text": "open"}},
                 {"type": "buttons", "buttons": [{"text": "button", "url": "https://button.example/path"}]}
             ]}
         })).unwrap();
         let found = extract_from_message(&message);
+        assert_eq!(
+            found
+                .iter()
+                .filter(|v| v.value == "https://hidden.example/rich")
+                .count(),
+            1
+        );
         assert!(
             found
                 .iter()

@@ -29,3 +29,16 @@ Inputs, URL lengths, traversal depth and number of results are bounded. The
 library does not fetch links, assess reputation, or prescribe moderation
 actions. Telegram invite and bot deep-link parameters may contain sensitive
 tokens; callers should avoid logging the raw value.
+
+## Deterministic parser property test
+
+The URL crate has an offline property test that generates 256 syntactically
+valid HTTP URLs and compares parser output with `url::Url`. Replay it with a
+fixed seed using:
+
+```sh
+TELOXIDE_URL_PROPTEST_SEED=72623859790382856 \
+  cargo test --locked -p teloxide-url --test adversarial_properties
+```
+
+The test reports only case metadata and never fetches generated URLs.

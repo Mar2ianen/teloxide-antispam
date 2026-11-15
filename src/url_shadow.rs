@@ -21,14 +21,14 @@ pub struct UrlShadowEvidence {
     pub confirmed_spammer_user_target: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct UrlShadowSignal {
     pub label: &'static str,
     pub coefficient: i16,
     pub explanation: &'static str,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct UrlShadowAnalysis {
     /// Advisory subtotal only. It is not a probability or production risk
     /// score and is not bounded to the existing anti-spam score scale.

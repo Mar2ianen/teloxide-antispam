@@ -24,6 +24,7 @@ pub enum Source {
     VisibleText,
     TelegramEntity,
     RichMessage,
+    Qr,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

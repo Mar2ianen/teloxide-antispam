@@ -1,0 +1,20 @@
+[package]
+name = "teloxide-url"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+description = "Small URL and Telegram reference extraction helpers, with an opt-in teloxide adapter"
+repository = "https://github.com/Mar2ianen/teloxide-antispam"
+readme = "README.md"
+
+[features]
+default = []
+teloxide = ["dep:teloxide"]
+
+[dependencies]
+url = "2.5"
+linkify = "0.11"
+teloxide = { git = "https://github.com/Mar2ianen/teloxide-fork", rev = "91ec68b19efd5e490fb27341a039ce0175b16929", default-features = false, optional = true, features = ["rich-text"] }
+
+[dev-dependencies]
+serde_json = "1"

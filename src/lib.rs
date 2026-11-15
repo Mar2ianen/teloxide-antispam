@@ -21,3 +21,7 @@ pub mod scoring;
 #[cfg(feature = "scoring")]
 pub mod signals;
 pub mod text;
+
+/// Optional standalone URL and Telegram reference parser.
+#[cfg(feature = "url")]
+pub use teloxide_url as url;

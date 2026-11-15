@@ -5,7 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        features: [minimal, unicode, classifier, embedding, scoring, cas, default, all]
+        features: [minimal, unicode, classifier, embedding, scoring, cas, url, default, all]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -24,5 +24,5 @@ jobs:
             default) ;;
             *) args=(--no-default-features --features '${{ matrix.features }}') ;;
           esac
-          cargo test --locked --all-targets "${args[@]}"
-          cargo clippy --locked --all-targets "${args[@]}" -- -D warnings
+          cargo test --locked --workspace --all-targets "${args[@]}"
+          cargo clippy --locked --workspace --all-targets "${args[@]}" -- -D warnings

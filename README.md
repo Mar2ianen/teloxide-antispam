@@ -16,6 +16,7 @@ the consuming application's responsibility.
 | `embedding` | Frozen-encoder linear heads: binary spam plus multilabel categories |
 | `scoring` | Assessment, profile/ID/channel signals, component scoring; enables `unicode` |
 | `cas` | Optional CAS HTTP lookup; no networking dependency otherwise |
+| `url` | Optional `teloxide-url` parser; URL data is not scored automatically |
 
 Default features: `scoring`, `classifier`, `embedding`. Minimal classifier integration:
 

@@ -16,6 +16,7 @@ classifier = ["unicode", "dep:anyhow"]
 embedding = ["dep:anyhow"]
 scoring = ["unicode", "dep:anyhow", "dep:chrono", "dep:teloxide-statistics"]
 cas = ["dep:reqwest", "dep:tracing"]
+url = ["dep:teloxide-url"]
 
 [[example]]
 name = "score_text"
@@ -26,6 +27,7 @@ name = "teloxide_antispam"
 path = "src/lib.rs"
 
 [dependencies]
+teloxide-url = { version = "0.1.0", path = "crates/teloxide-url", optional = true, default-features = false }
 anyhow = { version = "1", optional = true }
 chrono = { version = "0.4", optional = true }
 serde = { version = "1", features = ["derive"] }
@@ -37,6 +39,10 @@ regex = { version = "1", optional = true }
 unicode-normalization = { version = "=0.1.25", optional = true }
 unicode-properties = { version = "=0.1.4", default-features = false, features = ["general-category"], optional = true }
 unicode-script = { version = "=0.5.8", optional = true }
+
+[workspace]
+members = ["crates/teloxide-url"]
+resolver = "3"
 
 [dev-dependencies]
 base64 = "0.22"

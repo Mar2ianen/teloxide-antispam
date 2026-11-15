@@ -6,12 +6,10 @@
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct UrlShadowEvidence {
-    /// Number of parsed URLs outside the current chat and its configured
-    /// Telegram-affiliated channels.
-    pub external_url_count: u16,
+    /// Number of unique canonical external web targets after deduplication
+    /// across text, Telegram entities, RichMessage buttons, and QR extraction.
+    pub unique_external_url_count: u16,
     pub affiliated_url_count: u16,
-    /// URLs extracted from a QR code and classified as external.
-    pub external_qr_url_count: u16,
     /// Exact/hash-based hit from a fresh, locally loaded threat feed.
     pub verified_threat_feed_hit: bool,
     /// Independently computed promotion/solicitation evidence.
@@ -53,18 +51,11 @@ pub fn analyze_url_shadow(evidence: UrlShadowEvidence) -> UrlShadowAnalysis {
             explanation: "A numeric Telegram user target matches a locally confirmed spammer.",
         });
     }
-    if evidence.promotional_content && evidence.external_url_count > 0 {
+    if evidence.promotional_content && evidence.unique_external_url_count > 0 {
         signals.push(UrlShadowSignal {
             label: "promotion_with_external_url",
             coefficient: 8,
             explanation: "Promotion evidence co-occurs with at least one non-affiliated URL.",
-        });
-    }
-    if evidence.promotional_content && evidence.external_qr_url_count > 0 {
-        signals.push(UrlShadowSignal {
-            label: "promotion_with_external_qr_url",
-            coefficient: 8,
-            explanation: "Promotion evidence co-occurs with an external URL encoded in a QR.",
         });
     }
 
@@ -85,7 +76,7 @@ mod tests {
     #[test]
     fn url_only_and_affiliated_links_do_not_add_shadow_risk() {
         let analysis = analyze_url_shadow(UrlShadowEvidence {
-            external_url_count: 2,
+            unique_external_url_count: 2,
             affiliated_url_count: 1,
             ..UrlShadowEvidence::default()
         });
@@ -94,14 +85,34 @@ mod tests {
     }
 
     #[test]
-    fn promotion_and_external_qr_url_are_explained_separately() {
+    fn promotion_and_unique_external_target_add_one_source_neutral_signal() {
+        let text_only = analyze_url_shadow(UrlShadowEvidence {
+            unique_external_url_count: 1,
+            promotional_content: true,
+            ..UrlShadowEvidence::default()
+        });
+        // The source is deliberately absent from the scorer input: a target
+        // extracted from text and the same target extracted from QR have the
+        // same semantic count and score.
+        let text_and_qr_duplicate = analyze_url_shadow(UrlShadowEvidence {
+            unique_external_url_count: 1,
+            promotional_content: true,
+            ..UrlShadowEvidence::default()
+        });
+        assert_eq!(text_only, text_and_qr_duplicate);
+        assert_eq!(text_only.suggested_delta, 8);
+        assert_eq!(text_only.signals[0].label, "promotion_with_external_url");
+    }
+
+    #[test]
+    fn source_does_not_add_a_second_promotion_signal() {
         let analysis = analyze_url_shadow(UrlShadowEvidence {
-            external_qr_url_count: 1,
+            unique_external_url_count: 2,
             promotional_content: true,
             ..UrlShadowEvidence::default()
         });
         assert_eq!(analysis.suggested_delta, 8);
-        assert_eq!(analysis.signals[0].label, "promotion_with_external_qr_url");
+        assert_eq!(analysis.signals.len(), 1);
     }
 
     #[test]

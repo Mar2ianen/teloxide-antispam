@@ -33,6 +33,7 @@ pub fn extract_from_message(message: &Message) -> Vec<Found> {
         walk.blocks(&media.rich_message.blocks, 0);
         output.extend(walk.results);
     }
+    output.dedup();
     output.truncate(MAX_ITEMS);
     output
 }
@@ -118,6 +119,7 @@ pub fn extract_text_entities(text: &str, entities: &[MessageEntity]) -> Vec<Foun
     }
     out.extend(native);
     out.sort_by_key(|item| item.span.as_ref().map_or(usize::MAX, |s| s.start));
+    out.dedup();
     out.truncate(MAX_ITEMS);
     out
 }
@@ -420,6 +422,35 @@ mod tests {
     }
 
     #[test]
+    fn native_user_id_after_zwj_emoji_uses_utf16_and_utf8_boundaries() {
+        let text = "👨‍👩‍👧‍👦 Alice";
+        let e: MessageEntity = serde_json::from_value(serde_json::json!({
+            "type": "text_mention", "offset": 12, "length": 5,
+            "user": {"id": 42, "is_bot": false, "first_name": "Alice"}
+        }))
+        .unwrap();
+        let values = extract_text_entities(text, &[e]);
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].kind, Kind::UserId(42));
+        assert_eq!(values[0].span, Some(26..31));
+        assert_eq!(&text[values[0].span.clone().unwrap()], "Alice");
+    }
+
+    #[test]
+    fn zero_length_text_mention_cannot_create_a_numeric_user_target() {
+        let entity: MessageEntity = serde_json::from_value(serde_json::json!({
+            "type": "text_mention",
+            "offset": 0,
+            "length": 0,
+            "user": {"id": 42, "is_bot": false, "first_name": "Alice"}
+        }))
+        .unwrap();
+
+        let targets = extract_text_entities("Alice", &[entity]);
+        assert!(targets.is_empty());
+    }
+
+    #[test]
     fn utf16_offset_after_emoji_recovers_hidden_url() {
         let e: MessageEntity = serde_json::from_value(serde_json::json!({
             "type":"text_link", "offset":2, "length":6,
@@ -431,6 +462,118 @@ mod tests {
             values
                 .iter()
                 .any(|v| v.value == "https://example.org/secret" && v.span == Some(4..16))
+        );
+    }
+
+    #[test]
+    fn adjacent_entities_keep_text_order_and_duplicate_occurrences_collapse() {
+        let first: MessageEntity = serde_json::from_value(serde_json::json!({
+            "type": "url", "offset": 2, "length": 17
+        }))
+        .unwrap();
+        let second: MessageEntity = serde_json::from_value(serde_json::json!({
+            "type": "url", "offset": 20, "length": 17
+        }))
+        .unwrap();
+        let text = "😺https://a.example https://b.example";
+        let values = extract_text_entities(text, &[second.clone(), first.clone(), first]);
+        let urls: Vec<_> = values.iter().filter(|v| v.kind == Kind::Url).collect();
+        assert_eq!(urls.len(), 2);
+        assert_eq!(urls[0].value, "https://a.example");
+        assert_eq!(urls[0].span, Some(4..21));
+        assert_eq!(urls[0].source, Source::TelegramEntity);
+        assert_eq!(urls[1].value, "https://b.example");
+        assert_eq!(urls[1].span, Some(22..39));
+    }
+
+    #[test]
+    fn custom_emoji_entity_does_not_shift_following_utf16_url_span() {
+        let custom: MessageEntity = serde_json::from_value(serde_json::json!({
+            "type": "custom_emoji", "offset": 0, "length": 2,
+            "custom_emoji_id": "synthetic-custom-emoji"
+        }))
+        .unwrap();
+        let url: MessageEntity = serde_json::from_value(serde_json::json!({
+            "type": "url", "offset": 2, "length": 17
+        }))
+        .unwrap();
+        let values = extract_text_entities("😺https://a.example", &[custom, url]);
+        let target = values.iter().find(|v| v.kind == Kind::Url).unwrap();
+        assert_eq!(target.value, "https://a.example");
+        assert_eq!(target.span, Some(4..21));
+        assert_eq!(target.source, Source::TelegramEntity);
+    }
+
+    #[test]
+    fn hidden_text_link_after_combining_and_zwj_text_keeps_target_and_visible_label() {
+        let text = "😺e\u{301}👨‍👩‍👧‍👦 https://visible.example";
+        let entity: MessageEntity = serde_json::from_value(serde_json::json!({
+            "type": "text_link", "offset": 16, "length": 23,
+            "url": "https://hidden.example/private?token=synthetic"
+        }))
+        .unwrap();
+        let found = extract_text_entities(text, &[entity]);
+        let link = found
+            .iter()
+            .find(|v| v.source == Source::TelegramEntity)
+            .unwrap();
+        assert_eq!(link.span, Some(33..56));
+        assert_eq!(link.label.as_deref(), Some("https://visible.example"));
+        assert_eq!(link.value, "https://hidden.example/private?token=synthetic");
+    }
+
+    #[test]
+    fn message_caption_uses_utf16_entities_and_preserves_hidden_target() {
+        let message: Message = serde_json::from_value(serde_json::json!({
+            "message_id": 7,
+            "date": 1_700_000_000,
+            "chat": {"id": 42, "type": "private"},
+            "from": {"id": 13, "is_bot": false, "first_name": "Test"},
+            "photo": [{"file_id": "synthetic", "file_unique_id": "synthetic", "width": 1, "height": 1}],
+            "caption": "😺open",
+            "caption_entities": [{
+                "type": "text_link", "offset": 2, "length": 4,
+                "url": "https://hidden.example/caption?synthetic=1"
+            }]
+        })).unwrap();
+        let found = extract_from_message(&message);
+        assert!(
+            found
+                .iter()
+                .any(|v| v.value == "https://hidden.example/caption?synthetic=1"
+                    && v.label.as_deref() == Some("open")
+                    && v.span == Some(4..8)
+                    && v.source == Source::TelegramEntity)
+        );
+    }
+
+    #[test]
+    fn rich_message_hidden_links_and_buttons_keep_source_and_target() {
+        let message: Message = serde_json::from_value(serde_json::json!({
+            "message_id": 7,
+            "date": 1_700_000_000,
+            "chat": {"id": 42, "type": "private"},
+            "from": {"id": 13, "is_bot": false, "first_name": "Test"},
+            "rich_message": {"blocks": [
+                {"type": "paragraph", "text": ["😺", {"type": "url", "url": "https://hidden.example/rich", "text": "open"}]},
+                {"type": "buttons", "buttons": [{"text": "button", "url": "https://button.example/path"}]}
+            ]}
+        })).unwrap();
+        let found = extract_from_message(&message);
+        assert!(
+            found
+                .iter()
+                .any(|v| v.value == "https://hidden.example/rich"
+                    && v.label.as_deref() == Some("open")
+                    && v.source == Source::RichMessage
+                    && v.span.is_none())
+        );
+        assert!(
+            found
+                .iter()
+                .any(|v| v.value == "https://button.example/path"
+                    && v.label.as_deref() == Some("button")
+                    && v.source == Source::RichMessage)
         );
     }
 

@@ -266,7 +266,7 @@ impl RichWalker {
                     }
                 }
                 RichBlockKind::ExpandableBlockquote(v) => {
-                    self.inline(&v.text, depth + 1);
+                    self.blocks(&v.blocks, depth + 1);
                     if let Some(t) = &v.credit {
                         self.inline(t, depth + 1);
                     }
@@ -387,6 +387,30 @@ mod tests {
                 .iter()
                 .any(|f| f.value.contains("private.example"))
         );
+    }
+    #[test]
+    fn rich_expandable_quote_recurses_and_preserves_hidden_links() {
+        let rich: RichMessage = serde_json::from_value(serde_json::json!({
+            "blocks": [{
+                "type": "expandable_blockquote",
+                "blocks": [
+                    {"type":"paragraph","text":{"type":"url",
+                        "url":"https://example.org/inside","text":"открыть"}},
+                    {"type":"details","summary":"детали","blocks":[
+                        {"type":"paragraph","text":"@nested_channel"}
+                    ]}
+                ],
+                "credit": "источник"
+            }]
+        }))
+        .unwrap();
+        let mut walker = RichWalker::default();
+        walker.blocks(&rich.blocks, 0);
+        assert!(walker.results.iter().any(|v| {
+            v.value == "https://example.org/inside"
+                && v.label.as_deref() == Some("открыть")
+        }));
+        assert!(walker.results.iter().any(|v| v.value == "@nested_channel"));
     }
     #[test]
     fn hidden_link_overrides_visible_url() {

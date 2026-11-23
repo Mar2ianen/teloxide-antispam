@@ -407,8 +407,7 @@ mod tests {
         let mut walker = RichWalker::default();
         walker.blocks(&rich.blocks, 0);
         assert!(walker.results.iter().any(|v| {
-            v.value == "https://example.org/inside"
-                && v.label.as_deref() == Some("открыть")
+            v.value == "https://example.org/inside" && v.label.as_deref() == Some("открыть")
         }));
         assert!(walker.results.iter().any(|v| v.value == "@nested_channel"));
     }

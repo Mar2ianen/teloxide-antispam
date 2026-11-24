@@ -1812,8 +1812,8 @@ checksum = "07dd1d452d2c3dc94a4e1c5c3c9a3cc88c2ef5926674b75881e454c4dc3a14c4"
 
 [[package]]
 name = "teloxide"
-version = "0.21.0-rc.1"
-source = "git+https://github.com/Mar2ianen/teloxide-fork?rev=94cc9070bffcb400ed758345fb4cabe3dafcf20d#94cc9070bffcb400ed758345fb4cabe3dafcf20d"
+version = "0.21.0-rc.2"
+source = "git+https://github.com/Mar2ianen/teloxide-fork?rev=ce840d82daf47c3e9b9ee16fb05d62fbe0c24727#ce840d82daf47c3e9b9ee16fb05d62fbe0c24727"
 dependencies = [
  "bytes",
  "derive_more",
@@ -1855,8 +1855,8 @@ dependencies = [
 
 [[package]]
 name = "teloxide-core"
-version = "0.17.0-rc.1"
-source = "git+https://github.com/Mar2ianen/teloxide-fork?rev=94cc9070bffcb400ed758345fb4cabe3dafcf20d#94cc9070bffcb400ed758345fb4cabe3dafcf20d"
+version = "0.17.0-rc.2"
+source = "git+https://github.com/Mar2ianen/teloxide-fork?rev=ce840d82daf47c3e9b9ee16fb05d62fbe0c24727#ce840d82daf47c3e9b9ee16fb05d62fbe0c24727"
 dependencies = [
  "bitflags",
  "bytes",

@@ -4,8 +4,12 @@ use crate::calibration::LinearScoreCalibration;
 use serde::Deserialize;
 
 use crate::preprocess::{PREPROCESSING_VERSION, char_tokens, prepare_text, word_tokens};
+#[cfg(feature = "unicode-v3")]
+use crate::preprocess::{PREPROCESSING_VERSION_V3, prepare_text_v3};
 
 pub const UNICODE_WORD_CHAR_ANALYZER: &str = "unicode_word_char_v2";
+#[cfg(feature = "unicode-v3")]
+pub const UNICODE_WORD_CHAR_ANALYZER_V3: &str = "unicode_word_char_v3";
 
 /// Versioned TF-IDF/LogReg model: legacy word 1–2 or Unicode word/char.
 ///
@@ -26,7 +30,15 @@ enum FeatureModel {
     UnicodeWordChar {
         word: FeatureBlock,
         character: FeatureBlock,
+        preprocessing: UnicodePreprocessing,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnicodePreprocessing {
+    V2,
+    #[cfg(feature = "unicode-v3")]
+    V3,
 }
 
 #[derive(Debug, Clone)]
@@ -74,7 +86,9 @@ pub fn load_model(json: &str) -> anyhow::Result<LinearSpamModel> {
     let header: ModelHeader = serde_json::from_str(json)?;
     match header.analyzer.as_str() {
         "word_12_lower" => load_legacy_model(json),
-        UNICODE_WORD_CHAR_ANALYZER => load_unicode_model(json),
+        UNICODE_WORD_CHAR_ANALYZER => load_unicode_model(json, UnicodePreprocessing::V2),
+        #[cfg(feature = "unicode-v3")]
+        UNICODE_WORD_CHAR_ANALYZER_V3 => load_unicode_model(json, UnicodePreprocessing::V3),
         _ => anyhow::bail!("unsupported linear spam analyzer"),
     }
 }
@@ -102,12 +116,23 @@ fn load_legacy_model(json: &str) -> anyhow::Result<LinearSpamModel> {
     })
 }
 
-fn load_unicode_model(json: &str) -> anyhow::Result<LinearSpamModel> {
+fn load_unicode_model(
+    json: &str,
+    preprocessing: UnicodePreprocessing,
+) -> anyhow::Result<LinearSpamModel> {
     let export: UnicodeWordCharExport = serde_json::from_str(json)?;
     export.calibration.validate().map_err(anyhow::Error::msg)?;
-    if export.analyzer != UNICODE_WORD_CHAR_ANALYZER
-        || export.preprocessing != PREPROCESSING_VERSION
-    {
+    let expected_preprocessing = match preprocessing {
+        UnicodePreprocessing::V2 => PREPROCESSING_VERSION,
+        #[cfg(feature = "unicode-v3")]
+        UnicodePreprocessing::V3 => PREPROCESSING_VERSION_V3,
+    };
+    let expected_analyzer = match preprocessing {
+        UnicodePreprocessing::V2 => UNICODE_WORD_CHAR_ANALYZER,
+        #[cfg(feature = "unicode-v3")]
+        UnicodePreprocessing::V3 => UNICODE_WORD_CHAR_ANALYZER_V3,
+    };
+    if export.analyzer != expected_analyzer || export.preprocessing != expected_preprocessing {
         anyhow::bail!("unsupported linear spam preprocessing version");
     }
     if export.version.trim().is_empty() || !export.intercept.is_finite() {
@@ -123,6 +148,7 @@ fn load_unicode_model(json: &str) -> anyhow::Result<LinearSpamModel> {
         features: FeatureModel::UnicodeWordChar {
             word: load_block(export.word)?,
             character: load_block(export.character)?,
+            preprocessing,
         },
     })
 }
@@ -179,8 +205,16 @@ fn tokenize(text: &str) -> Vec<String> {
 pub fn spam_probability(model: &LinearSpamModel, text: &str) -> f64 {
     let dot = match &model.features {
         FeatureModel::Legacy(block) => block_dot(block, tokenize(text)),
-        FeatureModel::UnicodeWordChar { word, character } => {
-            let text = prepare_text(text).model_text();
+        FeatureModel::UnicodeWordChar {
+            word,
+            character,
+            preprocessing,
+        } => {
+            let text = match preprocessing {
+                UnicodePreprocessing::V2 => prepare_text(text).model_text(),
+                #[cfg(feature = "unicode-v3")]
+                UnicodePreprocessing::V3 => prepare_text_v3(text).model_text(),
+            };
             block_dot(word, word_tokens(&text)) + block_dot(character, char_tokens(&text))
         }
     };
@@ -290,6 +324,33 @@ mod tests {
             "character": {"vocab": {"дох": 3.0, "лс ": 4.0}, "coef": [2.0, 0.0], "weight": 0.5},
             "intercept": 0.2,
         })
+    }
+
+    #[cfg(feature = "unicode-v3")]
+    fn unicode_v3_export() -> serde_json::Value {
+        serde_json::json!({
+            "version": "synthetic-word-char-v3",
+            "analyzer": UNICODE_WORD_CHAR_ANALYZER_V3,
+            "preprocessing": PREPROCESSING_VERSION_V3,
+            "calibration": LinearScoreCalibration::default(),
+            "word": {"vocab": {"strasse": 1.0}, "coef": [2.0], "weight": 1.0},
+            "character": {"vocab": {"impossible-token": 1.0}, "coef": [0.0], "weight": 0.0},
+            "intercept": 0.0,
+        })
+    }
+
+    #[cfg(feature = "unicode-v3")]
+    #[test]
+    fn v3_export_uses_icu_casefold_and_rejects_cross_version_metadata() {
+        let model = load_model(&unicode_v3_export().to_string()).unwrap();
+        assert!((spam_probability(&model, "Straße") - sigmoid(2.0)).abs() < 1e-12);
+
+        let mut invalid = unicode_v3_export();
+        invalid["preprocessing"] = serde_json::json!(PREPROCESSING_VERSION);
+        assert!(load_model(&invalid.to_string()).is_err());
+        let mut invalid = unicode_v3_export();
+        invalid["analyzer"] = serde_json::json!(UNICODE_WORD_CHAR_ANALYZER);
+        assert!(load_model(&invalid.to_string()).is_err());
     }
 
     #[test]

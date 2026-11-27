@@ -5,7 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        features: [minimal, unicode, classifier, embedding, scoring, cas, url, default, all]
+        features: [minimal, unicode, unicode-v3, classifier, embedding, scoring, cas, url, default, all]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -26,3 +26,6 @@ jobs:
           esac
           cargo test --locked --workspace --all-targets "${args[@]}"
           cargo clippy --locked --workspace --all-targets "${args[@]}" -- -D warnings
+      - name: Compile Unicode V3 fuzz target
+        if: matrix.features == 'unicode-v3'
+        run: cargo check --locked --manifest-path fuzz/Cargo.toml

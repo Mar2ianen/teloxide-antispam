@@ -1,0 +1,21 @@
+[workspace]
+
+[package]
+name = "teloxide-antispam-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+teloxide-antispam = { path = "..", default-features = false, features = ["unicode-v3"] }
+
+[[bin]]
+name = "unicode_v3_preprocess"
+path = "fuzz_targets/unicode_v3_preprocess.rs"
+test = false
+doc = false
+bench = false

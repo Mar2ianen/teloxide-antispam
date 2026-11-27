@@ -12,6 +12,7 @@ the consuming application's responsibility.
 |---|---|
 | No defaults | Text helpers, calibration, categories taxonomy, action policy, CAS response parsing |
 | `unicode` | Versioned Unicode model view and word/character tokenization |
+| `unicode-v3` | Opt-in ICU4X 2.4 / Unicode 18 preprocessing and UTS #39 skeleton, while retaining V2 for existing model artifacts |
 | `classifier` | TF-IDF/LogReg v1/v2 loading and inference; enables `unicode` |
 | `embedding` | Frozen-encoder linear heads: binary spam plus multilabel categories |
 | `scoring` | Assessment, profile/ID/channel signals, component scoring; enables `unicode` |
@@ -39,7 +40,18 @@ confirmations count once; clearing the local label removes its contribution.
 ## Text models
 
 `logreg::load_model` distinguishes legacy `word_12_lower` from
-`unicode_word_char_v2` / `unicode-spam-v2`. Legacy inference preserves raw
+`unicode_word_char_v2` / `unicode-spam-v2`. The opt-in `unicode-v3` feature
+adds `unicode_word_char_v3` / `unicode-spam-v3-icu4x-2.4-uts39-18`; its model
+metadata must match exactly. V3 uses ICU4X 2.4.0 Unicode 18 properties,
+normalization and full default case folding, plus UTS #39 confusable
+skeletons. It intentionally changes model text (for example, `Straße` folds
+to `strasse`, and mixed-script confusables can map to a common skeleton).
+Existing V2 artifacts must continue to use V2 and cannot be relabeled or
+converted by changing metadata. V3 requires training and validating a new
+model against V3 model views. The `unicode-v3` feature retains V2 support for
+old artifacts and therefore currently compiles both Unicode stacks.
+
+Legacy inference preserves raw
 word 1–2 features and f32 weights. V2 uses NFKC, token-local homoglyph handling,
 invisible/bidi/Zalgo cleanup, an auxiliary spread-word view, and separately
 L2-normalized word 1–2 and char_wb 3–5 blocks. Original text is untouched.
@@ -128,6 +140,27 @@ cargo fmt --all -- --check
 cargo test --all-targets --all-features
 cargo clippy --all-targets --all-features -- -D warnings
 python3 -m unittest discover -s tools -p 'test_*.py'
+cargo test --no-default-features --features unicode-v3 --lib
+cargo check --manifest-path fuzz/Cargo.toml --locked
 ```
+
+The Unicode 18 conformance tests are fully offline and use pinned official
+Unicode data under `test-data/unicode/18.0.0/`; source URLs, licenses, and
+SHA-256 digests are recorded in that directory. The `unicode-v3` CI job runs
+the same corpus checks and a 512-case property test. V2 remains covered by
+the ordinary `unicode` and default feature jobs.
+
+The pinned Unicode 18 differential run currently finds 270 NFKC input-column
+differences out of 100,855 normalization-corpus inputs versus
+`unicode-normalization` 0.1.25, and 212 differing mappings out of 1,606 versus
+Rust `to_lowercase()`. These are expected Unicode-version/full-case-fold
+changes; ICU4X output is checked against the official corpus. Exhaustive
+scalar comparison also finds four V2/Unicode 18 whitespace differences
+(Python-compatible U+001C–U+001F) and 258 variation-selector differences
+(V2 only strips FE0E/FE0F in words; V3 uses the full Unicode property); the
+Bidi_Control set has zero differences. UTS #39 skeleton is applied once per
+input token as specified. Its output is not guaranteed to be a fixed point:
+V3 maps `Þ` to `þ`, while a second pass maps that output to `p`. Do not feed
+already-preprocessed model text back as if it were raw input.
 
 CI also tests each feature independently. Licensed under MIT.

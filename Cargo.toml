@@ -23,6 +23,11 @@ flood = []
 name = "score_text"
 required-features = ["classifier", "embedding"]
 
+[[test]]
+name = "flood_properties"
+path = "tests/flood_properties.rs"
+required-features = ["flood"]
+
 [lib]
 name = "teloxide_antispam"
 path = "src/lib.rs"
@@ -47,3 +52,4 @@ resolver = "3"
 
 [dev-dependencies]
 base64 = "0.22"
+proptest = { version = "=1.12.0", default-features = false, features = ["std"] }

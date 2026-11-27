@@ -6,7 +6,10 @@
 //! Telegram updates must reorder them or mark their evidence incomplete
 //! before updating these primitives.
 
-use std::fmt;
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    fmt,
+};
 
 /// A timestamp on the caller's monotonic event-time timeline, in microseconds.
 pub type EventTimeMicros = u64;
@@ -255,13 +258,593 @@ impl DecayedMean {
     }
 }
 
+/// Errors from the exact sliding window used for hard limits.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WindowError {
+    ZeroWindow,
+    ZeroCapacity,
+    ZeroEventWeight,
+    OutOfOrder {
+        last_accepted: EventTimeMicros,
+        received: EventTimeMicros,
+    },
+    CapacityExceeded,
+    CountOverflow,
+}
+
+impl fmt::Display for WindowError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ZeroWindow => f.write_str("sliding-window duration must be positive"),
+            Self::ZeroCapacity => f.write_str("sliding-window capacity must be positive"),
+            Self::ZeroEventWeight => f.write_str("sliding-window event weight must be positive"),
+            Self::OutOfOrder {
+                last_accepted,
+                received,
+            } => write!(
+                f,
+                "window event time {received} precedes last accepted time {last_accepted}"
+            ),
+            Self::CapacityExceeded => f.write_str("sliding-window capacity was exceeded"),
+            Self::CountOverflow => f.write_str("sliding-window event count overflowed"),
+        }
+    }
+}
+
+impl std::error::Error for WindowError {}
+
+/// Exact weighted event count for `(now - window, now]`.
+///
+/// Memory is bounded by `capacity`. When an event cannot be retained, the
+/// window becomes explicitly incomplete until that dropped event must have
+/// aged out. [`count_at`](Self::count_at) then returns `None`, never a
+/// deceptively low count. Samples must be submitted in nondecreasing time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExactWindow {
+    window_micros: u64,
+    capacity: usize,
+    last_at: Option<EventTimeMicros>,
+    events: VecDeque<(EventTimeMicros, u32)>,
+    retained_weight: u64,
+    incomplete_until: Option<EventTimeMicros>,
+    incomplete_forever: bool,
+}
+
+impl ExactWindow {
+    /// Creates a bounded exact window.
+    pub fn new(window_micros: u64, capacity: usize) -> Result<Self, WindowError> {
+        if window_micros == 0 {
+            return Err(WindowError::ZeroWindow);
+        }
+        if capacity == 0 {
+            return Err(WindowError::ZeroCapacity);
+        }
+        Ok(Self {
+            window_micros,
+            capacity,
+            last_at: None,
+            events: VecDeque::with_capacity(capacity.min(4096)),
+            retained_weight: 0,
+            incomplete_until: None,
+            incomplete_forever: false,
+        })
+    }
+
+    /// Retains one event with positive `weight` at `at`.
+    ///
+    /// Capacity overflow is observable and taints the window until the lost
+    /// event expires. The event is not retained and the error must not be
+    /// interpreted as a zero count.
+    pub fn observe(&mut self, at: EventTimeMicros, weight: u32) -> Result<u64, WindowError> {
+        if weight == 0 {
+            return Err(WindowError::ZeroEventWeight);
+        }
+        if let Some(last_at) = self.last_at
+            && at < last_at
+        {
+            return Err(WindowError::OutOfOrder {
+                last_accepted: last_at,
+                received: at,
+            });
+        }
+
+        let expired_before_or_at = at.checked_sub(self.window_micros);
+        let expired_count = self
+            .events
+            .iter()
+            .take_while(|(event_at, _)| {
+                expired_before_or_at.is_some_and(|cutoff| *event_at <= cutoff)
+            })
+            .count();
+        let expired_weight = self
+            .events
+            .iter()
+            .take(expired_count)
+            .map(|(_, old_weight)| u64::from(*old_weight))
+            .sum::<u64>();
+        let remaining_len = self.events.len() - expired_count;
+        let remaining_weight = self.retained_weight - expired_weight;
+        if remaining_len == self.capacity {
+            match at.checked_add(self.window_micros) {
+                Some(expiry) => {
+                    self.incomplete_until = Some(
+                        self.incomplete_until
+                            .map_or(expiry, |previous| previous.max(expiry)),
+                    );
+                }
+                None => self.incomplete_forever = true,
+            }
+            for _ in 0..expired_count {
+                self.events.pop_front();
+            }
+            self.retained_weight = remaining_weight;
+            self.last_at = Some(at);
+            return Err(WindowError::CapacityExceeded);
+        }
+
+        let Some(next_weight) = remaining_weight.checked_add(u64::from(weight)) else {
+            return Err(WindowError::CountOverflow);
+        };
+        for _ in 0..expired_count {
+            self.events.pop_front();
+        }
+        self.events.push_back((at, weight));
+        self.retained_weight = next_weight;
+        self.last_at = Some(at);
+        Ok(self.retained_weight)
+    }
+
+    /// Returns the exact count, or `None` while a dropped event could still
+    /// fall inside the requested window.
+    pub fn count_at(&self, at: EventTimeMicros) -> Result<Option<u64>, WindowError> {
+        if let Some(last_at) = self.last_at
+            && at < last_at
+        {
+            return Err(WindowError::OutOfOrder {
+                last_accepted: last_at,
+                received: at,
+            });
+        }
+        if self.incomplete_forever || self.incomplete_until.is_some_and(|until| at < until) {
+            return Ok(None);
+        }
+
+        let Some(cutoff) = at.checked_sub(self.window_micros) else {
+            return Ok(Some(self.retained_weight));
+        };
+        let expired = self
+            .events
+            .iter()
+            .take_while(|(event_at, _)| *event_at <= cutoff)
+            .map(|(_, weight)| u64::from(*weight))
+            .sum::<u64>();
+        Ok(Some(self.retained_weight - expired))
+    }
+
+    /// Whether the configured bound can currently represent the full window.
+    pub fn is_complete_at(&self, at: EventTimeMicros) -> Result<bool, WindowError> {
+        Ok(self.count_at(at)?.is_some())
+    }
+}
+
 fn decay(elapsed_micros: u64, tau_micros: u64) -> f64 {
     (-(elapsed_micros as f64) / tau_micros as f64).exp()
 }
 
+/// Stable identity for a message author in a chat snapshot.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum FloodActor {
+    User(i64),
+    SenderChat(i64),
+}
+
+/// Latest projected message input for a bounded conversation window.
+///
+/// `tokens` must already be normalized by the caller. The core deliberately
+/// receives no Telegram object, raw text, persistence handle, or policy.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConversationMessage {
+    pub message_id: i64,
+    pub event_at: EventTimeMicros,
+    pub actor: FloodActor,
+    pub reply_to: Option<i64>,
+    /// Telegram's shared media-group identity; album items count as one send.
+    pub album_id: Option<String>,
+    pub tokens: Vec<String>,
+    pub media_items: u32,
+    pub emoji_count: u32,
+    pub mention_count: u32,
+    pub forwarded: bool,
+}
+
+/// Safety bounds applied before allocating window-analysis state.
+pub const MAX_WINDOW_MESSAGES: usize = 2_048;
+pub const MAX_TOKENS_PER_MESSAGE: usize = 512;
+pub const MAX_TOTAL_TOKENS: usize = 16_384;
+pub const MAX_TOKEN_BYTES: usize = 256;
+
+/// Invalid or oversized input to [`analyze_window`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum WindowInputError {
+    ZeroDuration,
+    TooManyMessages,
+    TooManyTokens,
+    TokenTooLong,
+    DuplicateMessageId,
+}
+
+impl fmt::Display for WindowInputError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ZeroDuration => f.write_str("conversation window duration must be positive"),
+            Self::TooManyMessages => f.write_str("conversation window message limit exceeded"),
+            Self::TooManyTokens => f.write_str("conversation window token limit exceeded"),
+            Self::TokenTooLong => f.write_str("conversation token length limit exceeded"),
+            Self::DuplicateMessageId => {
+                f.write_str("conversation snapshot contains a duplicate message id")
+            }
+        }
+    }
+}
+
+impl std::error::Error for WindowInputError {}
+
+/// Typed observation names. These values are evidence only, never actions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FloodMetricKind {
+    LogicalMessages,
+    MessagesPerSecond,
+    MediaItems,
+    EmojiItems,
+    MentionItems,
+    ForwardedMessages,
+    LargestActorShare,
+    ConsecutiveActorRun,
+    ConversationTurns,
+    TokenEntropyBits,
+    ExactDuplicatePairs,
+    MaximumTrigramJaccard,
+    ContentNovelty,
+    ReplyTargetDiversity,
+    MessagesPerToken,
+    MaximumCrossActorJaccard,
+}
+
+/// A single numeric feature and whether its input snapshot is complete.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FloodMetric {
+    pub kind: FloodMetricKind,
+    pub value: Option<f64>,
+    pub complete: bool,
+}
+
+/// Evidence-only result for a bounded latest-message snapshot.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FloodAssessment {
+    pub metrics: Vec<FloodMetric>,
+    pub complete: bool,
+}
+
+impl FloodAssessment {
+    fn push(&mut self, kind: FloodMetricKind, value: Option<f64>) {
+        self.metrics.push(FloodMetric {
+            kind,
+            value,
+            complete: self.complete,
+        });
+    }
+
+    /// Finds one metric by its stable typed name.
+    pub fn metric(&self, kind: FloodMetricKind) -> Option<FloodMetric> {
+        self.metrics
+            .iter()
+            .copied()
+            .find(|metric| metric.kind == kind)
+    }
+}
+
+/// Summarizes a latest-projection snapshot for `(now - duration, now]`.
+///
+/// The caller is responsible for supplying one current revision per message,
+/// scoping the snapshot to one instance/chat/topic, and setting `complete` to
+/// false when database history or state is missing. No metric is itself a
+/// verdict; notably burst, repetition, and actor share are only observations.
+pub fn analyze_window(
+    messages: &[ConversationMessage],
+    now: EventTimeMicros,
+    duration_micros: u64,
+    complete: bool,
+) -> Result<FloodAssessment, WindowInputError> {
+    if duration_micros == 0 {
+        return Err(WindowInputError::ZeroDuration);
+    }
+    if messages.len() > MAX_WINDOW_MESSAGES {
+        return Err(WindowInputError::TooManyMessages);
+    }
+
+    let mut seen_message_ids = HashSet::with_capacity(messages.len());
+    let mut total_tokens = 0usize;
+    for message in messages {
+        if !seen_message_ids.insert(message.message_id) {
+            return Err(WindowInputError::DuplicateMessageId);
+        }
+        if message.tokens.len() > MAX_TOKENS_PER_MESSAGE {
+            return Err(WindowInputError::TooManyTokens);
+        }
+        total_tokens = total_tokens.saturating_add(message.tokens.len());
+        if total_tokens > MAX_TOTAL_TOKENS {
+            return Err(WindowInputError::TooManyTokens);
+        }
+        if message
+            .tokens
+            .iter()
+            .any(|token| token.len() > MAX_TOKEN_BYTES)
+        {
+            return Err(WindowInputError::TokenTooLong);
+        }
+    }
+
+    let cutoff = now.checked_sub(duration_micros);
+    let mut selected: Vec<_> = messages
+        .iter()
+        .filter(|message| {
+            message.event_at <= now && cutoff.is_none_or(|lower| message.event_at > lower)
+        })
+        .collect();
+    selected.sort_by_key(|message| (message.event_at, message.message_id));
+
+    let mut assessment = FloodAssessment {
+        metrics: Vec::with_capacity(16),
+        complete,
+    };
+    let mut seen_logical = HashSet::with_capacity(selected.len());
+    let logical_events: Vec<_> = selected
+        .iter()
+        .filter_map(|message| {
+            let key = match message.album_id.as_deref() {
+                Some(album) => LogicalMessageKey::Album(album),
+                None => LogicalMessageKey::Message(message.message_id),
+            };
+            seen_logical
+                .insert((message.actor, key.clone()))
+                .then_some((message.actor, key))
+        })
+        .collect();
+    let logical_messages = logical_events.len();
+    let seconds = duration_micros as f64 / 1_000_000.0;
+    assessment.push(
+        FloodMetricKind::LogicalMessages,
+        Some(logical_messages as f64),
+    );
+    assessment.push(
+        FloodMetricKind::MessagesPerSecond,
+        Some(logical_messages as f64 / seconds),
+    );
+    assessment.push(
+        FloodMetricKind::MediaItems,
+        Some(
+            selected
+                .iter()
+                .map(|message| u64::from(message.media_items))
+                .sum::<u64>() as f64,
+        ),
+    );
+    assessment.push(
+        FloodMetricKind::EmojiItems,
+        Some(
+            selected
+                .iter()
+                .map(|message| u64::from(message.emoji_count))
+                .sum::<u64>() as f64,
+        ),
+    );
+    assessment.push(
+        FloodMetricKind::MentionItems,
+        Some(
+            selected
+                .iter()
+                .map(|message| u64::from(message.mention_count))
+                .sum::<u64>() as f64,
+        ),
+    );
+    assessment.push(
+        FloodMetricKind::ForwardedMessages,
+        Some(selected.iter().filter(|message| message.forwarded).count() as f64),
+    );
+
+    let mut actor_logical = HashMap::<FloodActor, usize>::new();
+    let mut previous_actor = None;
+    let mut consecutive = 0usize;
+    let mut maximum_consecutive = 0usize;
+    let mut turns = 0usize;
+    for (actor, _) in &logical_events {
+        *actor_logical.entry(*actor).or_default() += 1;
+        if previous_actor == Some(*actor) {
+            consecutive += 1;
+        } else {
+            if previous_actor.is_some() {
+                turns += 1;
+            }
+            previous_actor = Some(*actor);
+            consecutive = 1;
+        }
+        maximum_consecutive = maximum_consecutive.max(consecutive);
+    }
+    let largest_actor_logical = actor_logical.values().copied().max().unwrap_or(0);
+    assessment.push(
+        FloodMetricKind::LargestActorShare,
+        (logical_messages > 0).then(|| largest_actor_logical as f64 / logical_messages as f64),
+    );
+    assessment.push(
+        FloodMetricKind::ConsecutiveActorRun,
+        (!selected.is_empty()).then_some(maximum_consecutive as f64),
+    );
+    assessment.push(
+        FloodMetricKind::ConversationTurns,
+        (!selected.is_empty()).then_some(turns as f64),
+    );
+
+    let mut token_counts = HashMap::<&str, usize>::new();
+    let mut prior_tokens = HashSet::<&str>::new();
+    let mut fresh_tokens = 0usize;
+    let mut token_occurrences = 0usize;
+    let mut unique_reply_targets = HashSet::<i64>::new();
+    let mut reply_count = 0usize;
+    let mut duplicates_by_context = HashMap::<(Option<i64>, &[String]), usize>::new();
+    let mut unique_token_sets = Vec::<(FloodActor, HashSet<&str>)>::new();
+    let mut message_ngrams = Vec::<HashSet<Vec<&str>>>::new();
+    let mut seen_logical_context = HashSet::with_capacity(logical_messages);
+    for message in &selected {
+        let logical_key = match message.album_id.as_deref() {
+            Some(album) => LogicalMessageKey::Album(album),
+            None => LogicalMessageKey::Message(message.message_id),
+        };
+        if seen_logical_context.insert((message.actor, logical_key))
+            && let Some(reply_to) = message.reply_to
+        {
+            reply_count += 1;
+            unique_reply_targets.insert(reply_to);
+        }
+        if !message.tokens.is_empty() {
+            *duplicates_by_context
+                .entry((message.reply_to, message.tokens.as_slice()))
+                .or_default() += 1;
+            let mut token_set = HashSet::new();
+            for token in &message.tokens {
+                *token_counts.entry(token.as_str()).or_default() += 1;
+                fresh_tokens += usize::from(!prior_tokens.contains(token.as_str()));
+                token_set.insert(token.as_str());
+                token_occurrences += 1;
+            }
+            prior_tokens.extend(token_set.iter().copied());
+            unique_token_sets.push((message.actor, token_set));
+        }
+        let ngrams: HashSet<_> = message
+            .tokens
+            .windows(3)
+            .map(|ngram| ngram.iter().map(String::as_str).collect())
+            .collect();
+        if !ngrams.is_empty() {
+            message_ngrams.push(ngrams);
+        }
+    }
+    let entropy = if token_occurrences > 1 && token_counts.len() > 1 {
+        let total = token_occurrences as f64;
+        Some(
+            token_counts
+                .values()
+                .map(|count| {
+                    let probability = *count as f64 / total;
+                    -probability * probability.log2()
+                })
+                .sum(),
+        )
+    } else {
+        None
+    };
+    assessment.push(FloodMetricKind::TokenEntropyBits, entropy);
+    assessment.push(
+        FloodMetricKind::ExactDuplicatePairs,
+        Some(
+            duplicates_by_context
+                .values()
+                .map(|count| count.saturating_mul(count.saturating_sub(1)) / 2)
+                .sum::<usize>() as f64,
+        ),
+    );
+    assessment.push(
+        FloodMetricKind::MaximumTrigramJaccard,
+        maximum_pairwise_jaccard(&message_ngrams),
+    );
+    assessment.push(
+        FloodMetricKind::ContentNovelty,
+        (token_occurrences > 0).then(|| fresh_tokens as f64 / token_occurrences as f64),
+    );
+    assessment.push(
+        FloodMetricKind::ReplyTargetDiversity,
+        (reply_count > 0).then(|| unique_reply_targets.len() as f64 / reply_count as f64),
+    );
+    assessment.push(
+        FloodMetricKind::MessagesPerToken,
+        (token_occurrences > 0).then(|| logical_messages as f64 / token_occurrences as f64),
+    );
+    assessment.push(
+        FloodMetricKind::MaximumCrossActorJaccard,
+        maximum_cross_actor_jaccard(&unique_token_sets),
+    );
+
+    Ok(assessment)
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+enum LogicalMessageKey<'a> {
+    Message(i64),
+    Album(&'a str),
+}
+
+fn maximum_pairwise_jaccard(sets: &[HashSet<Vec<&str>>]) -> Option<f64> {
+    if sets.len() < 2 {
+        return None;
+    }
+    let mut maximum: f64 = 0.0;
+    for (index, left) in sets.iter().enumerate() {
+        for right in &sets[index + 1..] {
+            let union = left.union(right).count();
+            if union > 0 {
+                maximum = maximum.max(left.intersection(right).count() as f64 / union as f64);
+            }
+        }
+    }
+    Some(maximum)
+}
+
+fn maximum_cross_actor_jaccard(sets: &[(FloodActor, HashSet<&str>)]) -> Option<f64> {
+    if sets.len() < 2 {
+        return None;
+    }
+    let mut maximum: f64 = 0.0;
+    let mut compared = false;
+    for (index, (left_actor, left)) in sets.iter().enumerate() {
+        for (right_actor, right) in &sets[index + 1..] {
+            if left_actor == right_actor {
+                continue;
+            }
+            let union = left.union(right).count();
+            if union > 0 {
+                compared = true;
+                maximum = maximum.max(left.intersection(right).count() as f64 / union as f64);
+            }
+        }
+    }
+    compared.then_some(maximum)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{DecayedMean, EwmaError, EwmaRate};
+    use super::{
+        ConversationMessage, DecayedMean, EwmaError, EwmaRate, FloodActor, FloodMetricKind,
+        WindowInputError, analyze_window,
+    };
+
+    fn message(
+        message_id: i64,
+        actor: FloodActor,
+        tokens: &[&str],
+        reply_to: Option<i64>,
+    ) -> ConversationMessage {
+        ConversationMessage {
+            message_id,
+            event_at: message_id as u64 * 1_000_000,
+            actor,
+            reply_to,
+            album_id: None,
+            tokens: tokens.iter().map(|token| (*token).to_owned()).collect(),
+            media_items: 0,
+            emoji_count: 0,
+            mention_count: 0,
+            forwarded: false,
+        }
+    }
 
     #[test]
     fn rate_uses_event_weight_and_decay_at_equal_and_later_timestamps() {
@@ -408,5 +991,253 @@ mod tests {
             })
             .fold((0.0, 0.0), |(sum, weight), (s, w)| (sum + s, weight + w));
         assert!((mean.mean_at(now).unwrap().unwrap() - sum / weight).abs() < 1e-10);
+    }
+
+    #[test]
+    fn exact_window_uses_open_lower_and_closed_upper_boundaries() {
+        let mut window = super::ExactWindow::new(1_000, 4).unwrap();
+        assert_eq!(window.observe(0, 1), Ok(1));
+        assert_eq!(window.observe(999, 2), Ok(3));
+        assert_eq!(window.count_at(999), Ok(Some(3)));
+        assert_eq!(window.observe(1_000, 1), Ok(3));
+        assert_eq!(window.count_at(1_000), Ok(Some(3)));
+    }
+
+    #[test]
+    fn exact_window_reports_incomplete_until_overflowed_event_expires() {
+        use super::WindowError;
+
+        let mut window = super::ExactWindow::new(10, 1).unwrap();
+        assert_eq!(window.observe(2, 1), Ok(1));
+        assert_eq!(window.observe(3, 1), Err(WindowError::CapacityExceeded));
+        assert_eq!(window.count_at(12), Ok(None));
+        assert_eq!(window.count_at(13), Ok(Some(0)));
+        assert_eq!(window.observe(13, 1), Ok(1));
+    }
+
+    #[test]
+    fn exact_window_invalid_input_does_not_change_state() {
+        use super::WindowError;
+
+        assert_eq!(
+            super::ExactWindow::new(0, 1).unwrap_err(),
+            WindowError::ZeroWindow
+        );
+        assert_eq!(
+            super::ExactWindow::new(1, 0).unwrap_err(),
+            WindowError::ZeroCapacity
+        );
+        let mut window = super::ExactWindow::new(100, 2).unwrap();
+        window.observe(10, 2).unwrap();
+        let before = window.clone();
+        assert_eq!(window.observe(11, 0), Err(WindowError::ZeroEventWeight));
+        assert_eq!(
+            window.observe(9, 1),
+            Err(WindowError::OutOfOrder {
+                last_accepted: 10,
+                received: 9,
+            })
+        );
+        assert_eq!(window, before);
+    }
+
+    #[test]
+    fn exact_window_count_overflow_does_not_prune_or_advance_time() {
+        let mut window = super::ExactWindow::new(100, 2).unwrap();
+        window.observe(10, 2).unwrap();
+        window.retained_weight = u64::MAX;
+        let before = window.clone();
+
+        assert_eq!(
+            window.observe(109, 3),
+            Err(super::WindowError::CountOverflow)
+        );
+        assert_eq!(window, before);
+    }
+
+    #[test]
+    fn exact_window_matches_full_history_reference() {
+        let duration = 17_000_u64;
+        let mut window = super::ExactWindow::new(duration, 1_000).unwrap();
+        let mut events = Vec::new();
+        let mut at = 0_u64;
+        let mut seed = 0xfeed_beef_u64;
+        for _ in 0..500 {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+            at += seed % 2_000 + 1;
+            let weight = ((seed >> 20) % 4 + 1) as u32;
+            events.push((at, weight));
+            window.observe(at, weight).unwrap();
+        }
+        for extra in [0, 1, duration / 2, duration, duration * 3] {
+            let now = at + extra;
+            let expected = events
+                .iter()
+                .filter(|(time, _)| *time > now.saturating_sub(duration) && *time <= now)
+                .map(|(_, weight)| u64::from(*weight))
+                .sum::<u64>();
+            assert_eq!(window.count_at(now), Ok(Some(expected)));
+        }
+    }
+
+    #[test]
+    fn media_group_counts_as_one_logical_send_and_keeps_all_items() {
+        let mut first = message(1, FloodActor::User(10), &[], None);
+        first.album_id = Some("album-1".to_owned());
+        first.media_items = 1;
+        let mut second = message(2, FloodActor::User(10), &[], None);
+        second.album_id = Some("album-1".to_owned());
+        second.media_items = 2;
+        let third = message(3, FloodActor::User(20), &[], None);
+
+        let result = analyze_window(&[first, second, third], 10_000_000, 10_000_000, true).unwrap();
+        assert_eq!(
+            result
+                .metric(FloodMetricKind::LogicalMessages)
+                .unwrap()
+                .value,
+            Some(2.0)
+        );
+        assert_eq!(
+            result.metric(FloodMetricKind::MediaItems).unwrap().value,
+            Some(3.0)
+        );
+        assert_eq!(
+            result
+                .metric(FloodMetricKind::LargestActorShare)
+                .unwrap()
+                .value,
+            Some(0.5)
+        );
+    }
+
+    #[test]
+    fn repeated_short_replies_to_different_targets_are_not_exact_duplicates() {
+        let messages = [
+            message(1, FloodActor::User(10), &["fedora"], Some(100)),
+            message(2, FloodActor::User(10), &["fedora"], Some(200)),
+        ];
+        let result = analyze_window(&messages, 10_000_000, 10_000_000, true).unwrap();
+        assert_eq!(
+            result
+                .metric(FloodMetricKind::ExactDuplicatePairs)
+                .unwrap()
+                .value,
+            Some(0.0)
+        );
+        assert_eq!(
+            result
+                .metric(FloodMetricKind::MaximumTrigramJaccard)
+                .unwrap()
+                .value,
+            None
+        );
+        assert_eq!(
+            result
+                .metric(FloodMetricKind::ReplyTargetDiversity)
+                .unwrap()
+                .value,
+            Some(1.0)
+        );
+    }
+
+    #[test]
+    fn exact_duplicates_require_the_same_reply_context_and_are_only_evidence() {
+        let messages = [
+            message(1, FloodActor::User(10), &["buy", "cheap", "now"], Some(100)),
+            message(2, FloodActor::User(10), &["buy", "cheap", "now"], Some(100)),
+        ];
+        let result = analyze_window(&messages, 10_000_000, 10_000_000, false).unwrap();
+        assert!(!result.complete);
+        assert!(result.metrics.iter().all(|metric| !metric.complete));
+        assert_eq!(
+            result
+                .metric(FloodMetricKind::ExactDuplicatePairs)
+                .unwrap()
+                .value,
+            Some(1.0)
+        );
+    }
+
+    #[test]
+    fn informative_monologue_has_features_but_no_verdict_or_policy() {
+        let messages = [
+            message(1, FloodActor::User(10), &["first", "new", "fact"], None),
+            message(2, FloodActor::User(10), &["second", "new", "fact"], None),
+            message(3, FloodActor::User(10), &["third", "useful", "fact"], None),
+        ];
+        let result = analyze_window(&messages, 10_000_000, 10_000_000, true).unwrap();
+        assert_eq!(
+            result
+                .metric(FloodMetricKind::LargestActorShare)
+                .unwrap()
+                .value,
+            Some(1.0)
+        );
+        assert_eq!(
+            result
+                .metric(FloodMetricKind::ExactDuplicatePairs)
+                .unwrap()
+                .value,
+            Some(0.0)
+        );
+        assert!(
+            result
+                .metric(FloodMetricKind::TokenEntropyBits)
+                .unwrap()
+                .value
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn empty_snapshot_reports_unknown_context_features_and_zero_counts() {
+        let result = analyze_window(&[], 10_000_000, 5_000_000, true).unwrap();
+        assert_eq!(
+            result
+                .metric(FloodMetricKind::LogicalMessages)
+                .unwrap()
+                .value,
+            Some(0.0)
+        );
+        assert_eq!(
+            result
+                .metric(FloodMetricKind::MessagesPerSecond)
+                .unwrap()
+                .value,
+            Some(0.0)
+        );
+        assert_eq!(
+            result
+                .metric(FloodMetricKind::TokenEntropyBits)
+                .unwrap()
+                .value,
+            None
+        );
+        assert_eq!(
+            result
+                .metric(FloodMetricKind::ContentNovelty)
+                .unwrap()
+                .value,
+            None
+        );
+    }
+
+    #[test]
+    fn window_input_rejects_duplicate_ids_and_oversized_token_data() {
+        let duplicate = [
+            message(7, FloodActor::User(10), &["a"], None),
+            message(7, FloodActor::User(20), &["b"], None),
+        ];
+        assert_eq!(
+            analyze_window(&duplicate, 10_000_000, 10_000_000, true).unwrap_err(),
+            WindowInputError::DuplicateMessageId
+        );
+        let mut too_long = message(8, FloodActor::User(10), &["a"], None);
+        too_long.tokens[0] = "x".repeat(super::MAX_TOKEN_BYTES + 1);
+        assert_eq!(
+            analyze_window(&[too_long], 10_000_000, 10_000_000, true).unwrap_err(),
+            WindowInputError::TokenTooLong
+        );
     }
 }

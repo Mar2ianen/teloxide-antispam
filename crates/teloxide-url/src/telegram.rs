@@ -311,6 +311,136 @@ fn parse_positive_message_id(s: &str) -> Option<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn telegram_link_taxonomy_preserves_numeric_identity_boundaries() {
+        let mention = crate::find("Contact @alice_bot");
+        assert!(
+            mention
+                .iter()
+                .any(|item| { item.kind == crate::Kind::Mention && item.value == "@alice_bot" })
+        );
+
+        let profile = parse_telegram_link("https://t.me/Alice_Bot");
+        let resolved_profile = parse_telegram_link("tg://resolve?domain=Alice_Bot");
+        assert_eq!(
+            profile,
+            Some(TelegramLink::Profile {
+                username: "alice_bot".into()
+            })
+        );
+        assert_eq!(profile, resolved_profile);
+
+        assert_eq!(
+            parse_telegram_link("tg://user?id=424242"),
+            Some(TelegramLink::UserId(424242))
+        );
+        assert_eq!(
+            parse_telegram_link("https://t.me/c/123456/321/789"),
+            Some(TelegramLink::Message {
+                peer: TelegramPeer::ChatId(-1_000_000_123_456),
+                message_id: 789,
+                topic_id: Some(321),
+            })
+        );
+        assert_ne!(
+            parse_telegram_link("tg://user?id=424242"),
+            parse_telegram_link("https://t.me/c/424242/1")
+        );
+    }
+
+    #[test]
+    fn invite_syntax_is_never_guessed_into_a_peer_identity() {
+        for value in [
+            "https://t.me/+SyntheticInviteHash",
+            "https://t.me/joinchat/SyntheticInviteHash",
+            "tg://join?invite=SyntheticInviteHash",
+        ] {
+            assert!(matches!(
+                parse_telegram_link(value),
+                Some(TelegramLink::Invite { .. })
+            ));
+        }
+        assert!(matches!(
+            parse_telegram_link("https://t.me/+123456789"),
+            Some(TelegramLink::AmbiguousPlus { .. })
+        ));
+    }
+
+    #[test]
+    fn bot_start_kinds_and_mini_app_route_are_typed_without_resolving_username() {
+        let cases = [
+            (
+                "https://t.me/launch_bot?start=synthetic",
+                BotStartKind::Start,
+            ),
+            (
+                "https://t.me/launch_bot?startgroup=synthetic",
+                BotStartKind::StartGroup,
+            ),
+            (
+                "https://t.me/launch_bot?startchannel=synthetic",
+                BotStartKind::StartChannel,
+            ),
+            (
+                "https://t.me/launch_bot/demo?startapp=synthetic",
+                BotStartKind::StartApp,
+            ),
+        ];
+
+        for (value, expected_kind) in cases {
+            assert!(matches!(
+                parse_telegram_link(value),
+                Some(TelegramLink::BotStart { username, kind, .. })
+                    if username == "launch_bot" && kind == expected_kind
+            ));
+        }
+        assert!(matches!(
+            parse_telegram_link("https://t.me/launch_bot/demo?startapp=synthetic"),
+            Some(TelegramLink::BotStart {
+                app: Some(app),
+                ..
+            }) if app == "demo"
+        ));
+    }
+
+    #[test]
+    fn bot_like_username_suffixes_do_not_change_parser_identity() {
+        for username in [
+            "ordinarybot",
+            "ordinaryagent",
+            "ordinaryai",
+            "ordinaryapp",
+            "ordinarygame",
+            "ordinarygay",
+        ] {
+            assert_eq!(
+                parse_telegram_link(&format!("https://t.me/{username}")),
+                Some(TelegramLink::Profile {
+                    username: username.into()
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn malformed_numeric_and_message_peer_values_remain_unresolved_routes() {
+        for value in [
+            "tg://user?id=0",
+            "tg://user?id=-1",
+            "tg://user?id=18446744073709551616",
+            "https://t.me/c/0/7",
+            "https://t.me/c/123456/0",
+            "https://t.me/c/123456/1/0",
+            "tg://resolve?domain=invalid-name",
+        ] {
+            assert!(matches!(
+                parse_telegram_link(value),
+                Some(TelegramLink::Other { .. })
+            ));
+        }
+    }
+
     #[test]
     fn private_chat_ids_are_only_calculated_from_c_routes() {
         assert_eq!(

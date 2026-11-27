@@ -271,6 +271,9 @@ pub fn find(text: &str) -> Vec<Found> {
 
 /// Convert Telegram's UTF-16 offsets to Rust byte offsets, safely.
 pub fn utf16_range(text: &str, offset: usize, length: usize) -> Option<Range<usize>> {
+    if length == 0 {
+        return None;
+    }
     let end = offset.checked_add(length)?;
     fn at(text: &str, target: usize) -> Option<usize> {
         let mut units = 0usize;
@@ -310,6 +313,18 @@ mod tests {
     fn unicode_entity_offsets() {
         assert_eq!(utf16_range("😺привет", 2, 6), Some(4..16));
         assert_eq!(utf16_range("😺привет", 1, 2), None);
+    }
+    #[test]
+    fn utf16_ranges_cover_non_bmp_zwj_combining_and_reject_invalid_lengths() {
+        // Hand-counted UTF-16 units and UTF-8 bytes: 😺(2/4), e(1/1), ◌́(1/2),
+        // family ZWJ sequence(11/25), space(1/1), then an ASCII URL.
+        let text = "😺e\u{301}👨‍👩‍👧‍👦 https://example.org/a";
+        assert_eq!(utf16_range(text, 16, 21), Some(33..54));
+        assert_eq!(utf16_range("👨‍👩‍👧‍👦x", 11, 1), Some(25..26));
+        assert_eq!(utf16_range("😺x", 0, 1), None); // split surrogate pair
+        assert_eq!(utf16_range("text", 0, 0), None);
+        assert_eq!(utf16_range("text", usize::MAX, 2), None);
+        assert_eq!(utf16_range("text", 3, 2), None);
     }
     #[test]
     fn target_host_not_fake_prefix() {

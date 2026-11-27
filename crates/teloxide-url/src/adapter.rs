@@ -8,10 +8,10 @@ use teloxide::types::{
 use crate::extract::MAX_URL_BYTES;
 use crate::{Found, Kind, MAX_ITEMS, Source, find, parse_telegram_link, parse_url, utf16_range};
 
-fn url_kind(value: &str) -> Kind {
+fn custom_emoji_candidate_id(value: &str) -> Option<u64> {
     match parse_telegram_link(value) {
-        Some(crate::TelegramLink::CustomEmojiFallback { id }) => Kind::CustomEmojiFallback { id },
-        _ => Kind::Url,
+        Some(crate::TelegramLink::CustomEmojiFallback { id }) => Some(id),
+        _ => None,
     }
 }
 
@@ -60,17 +60,19 @@ pub fn extract_text_entities(text: &str, entities: &[MessageEntity]) -> Vec<Foun
         let item = match &e.kind {
             MessageEntityKind::Url if parse_url(visible).is_some() => Found {
                 value: visible.to_owned(),
-                kind: url_kind(visible),
+                kind: Kind::Url,
                 source: Source::TelegramEntity,
                 span: Some(span.clone()),
                 label: None,
+                custom_emoji_fallback_id: custom_emoji_candidate_id(visible),
             },
             MessageEntityKind::TextLink { url } => Found {
                 value: url.as_str().to_owned(),
-                kind: url_kind(url.as_str()),
+                kind: Kind::Url,
                 source: Source::TelegramEntity,
                 span: Some(span.clone()),
                 label: Some(visible.into()),
+                custom_emoji_fallback_id: custom_emoji_candidate_id(url.as_str()),
             },
             MessageEntityKind::Mention => Found {
                 value: visible.into(),
@@ -78,6 +80,7 @@ pub fn extract_text_entities(text: &str, entities: &[MessageEntity]) -> Vec<Foun
                 source: Source::TelegramEntity,
                 span: Some(span.clone()),
                 label: None,
+                custom_emoji_fallback_id: None,
             },
             MessageEntityKind::TextMention { user } => Found {
                 value: visible.into(),
@@ -85,6 +88,7 @@ pub fn extract_text_entities(text: &str, entities: &[MessageEntity]) -> Vec<Foun
                 source: Source::TelegramEntity,
                 span: Some(span.clone()),
                 label: None,
+                custom_emoji_fallback_id: None,
             },
             MessageEntityKind::Hashtag => Found {
                 value: visible.into(),
@@ -92,6 +96,7 @@ pub fn extract_text_entities(text: &str, entities: &[MessageEntity]) -> Vec<Foun
                 source: Source::TelegramEntity,
                 span: Some(span.clone()),
                 label: None,
+                custom_emoji_fallback_id: None,
             },
             MessageEntityKind::Cashtag => Found {
                 value: visible.into(),
@@ -99,6 +104,7 @@ pub fn extract_text_entities(text: &str, entities: &[MessageEntity]) -> Vec<Foun
                 source: Source::TelegramEntity,
                 span: Some(span.clone()),
                 label: None,
+                custom_emoji_fallback_id: None,
             },
             MessageEntityKind::BotCommand => Found {
                 value: visible.into(),
@@ -106,6 +112,7 @@ pub fn extract_text_entities(text: &str, entities: &[MessageEntity]) -> Vec<Foun
                 source: Source::TelegramEntity,
                 span: Some(span.clone()),
                 label: None,
+                custom_emoji_fallback_id: None,
             },
             _ => continue,
         };
@@ -153,7 +160,15 @@ impl RichWalker {
                 source: Source::RichMessage,
                 span: None,
                 label,
+                custom_emoji_fallback_id: None,
             });
+        }
+    }
+    fn record_telegram_url(&mut self, value: &str, label: Option<String>) {
+        let start = self.results.len();
+        self.record(value, Kind::Url, label);
+        if let Some(found) = self.results.get_mut(start) {
+            found.custom_emoji_fallback_id = custom_emoji_candidate_id(value);
         }
     }
     fn button(&mut self, button: &RichMessageButton, depth: usize) {
@@ -188,7 +203,7 @@ impl RichWalker {
             RichText::Object(obj) => match obj {
                 RichTextObject::Url(v) => {
                     if parse_url(&v.url).is_some() {
-                        self.record(&v.url, url_kind(&v.url), Some(label(&v.text)));
+                        self.record_telegram_url(&v.url, Some(label(&v.text)));
                     }
                     self.inline(&v.text, depth + 1);
                 }
@@ -438,7 +453,8 @@ mod tests {
         .unwrap();
         let found = extract_text_entities("😀", &[entity]);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].kind, Kind::CustomEmojiFallback { id: 42 });
+        assert_eq!(found[0].kind, Kind::Url);
+        assert_eq!(found[0].custom_emoji_fallback_id, Some(42));
         assert_eq!(found[0].source, Source::TelegramEntity);
         assert_eq!(found[0].span, Some(0..4));
         assert_eq!(found[0].label.as_deref(), Some("😀"));
@@ -459,7 +475,8 @@ mod tests {
         let mut walker = RichWalker::default();
         walker.blocks(&rich.blocks, 0);
         assert!(walker.results.iter().any(|found| {
-            found.kind == Kind::CustomEmojiFallback { id: 42 }
+            found.kind == Kind::Url
+                && found.custom_emoji_fallback_id == Some(42)
                 && found.source == Source::RichMessage
                 && found.label.as_deref() == Some("😀")
         }));

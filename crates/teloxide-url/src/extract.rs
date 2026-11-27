@@ -14,11 +14,6 @@ pub enum Kind {
     Mention,
     /// Native Telegram text_mention identifies an actual user (not a guessed ID).
     UserId(u64),
-    /// A strict custom-emoji URL target. This remains only a candidate until a
-    /// consumer validates its Telegram entity and complete visible emoji label.
-    CustomEmojiFallback {
-        id: u64,
-    },
     Hashtag,
     Cashtag,
     BotCommand,
@@ -42,6 +37,9 @@ pub struct Found {
     pub span: Option<Range<usize>>,
     /// Display text for links whose actual URL differs from what the user sees.
     pub label: Option<String>,
+    /// Strict `tg://emoji?id=` candidate on an addressed Telegram URL entity
+    /// or rich URL node. It does not validate the label or grant an exemption.
+    pub custom_emoji_fallback_id: Option<u64>,
 }
 
 impl Found {
@@ -52,6 +50,7 @@ impl Found {
             source: Source::VisibleText,
             span: None,
             label: None,
+            custom_emoji_fallback_id: None,
         }
     }
 }
@@ -102,6 +101,7 @@ pub fn find_urls(text: &str) -> Vec<Found> {
             source: Source::VisibleText,
             span: Some(item.start()..item.end()),
             label: None,
+            custom_emoji_fallback_id: None,
         });
     }
     // `linkify` intentionally skips some valid bracketed IP literals such as
@@ -139,6 +139,7 @@ pub fn find_urls(text: &str) -> Vec<Found> {
                     source: Source::VisibleText,
                     span: Some(index..end),
                     label: None,
+                    custom_emoji_fallback_id: None,
                 });
             }
         }
@@ -174,6 +175,7 @@ pub fn find_urls(text: &str) -> Vec<Found> {
                     source: Source::VisibleText,
                     span: Some(index..end),
                     label: None,
+                    custom_emoji_fallback_id: None,
                 });
             }
         }
@@ -267,6 +269,7 @@ pub fn find(text: &str) -> Vec<Found> {
             source: Source::VisibleText,
             span: Some(start..end),
             label: None,
+            custom_emoji_fallback_id: None,
         });
     }
     found.sort_by_key(|v| v.span.as_ref().map_or(usize::MAX, |s| s.start));

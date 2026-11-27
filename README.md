@@ -17,6 +17,7 @@ the consuming application's responsibility.
 | `scoring` | Assessment, profile/ID/channel signals, component scoring; enables `unicode` |
 | `cas` | Optional CAS HTTP lookup; no networking dependency otherwise |
 | `url` | Optional `teloxide-url` parser; URL data is not scored automatically |
+| `flood` | Pure event-time EWMA primitives; no Telegram, persistence, or enforcement |
 
 Default features: `scoring`, `classifier`, `embedding`. Minimal classifier integration:
 

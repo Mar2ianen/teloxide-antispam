@@ -5,7 +5,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        features: [minimal, unicode, classifier, embedding, scoring, cas, url, default, all]
+        features: [minimal, unicode, classifier, embedding, scoring, cas, url, flood, default, all]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

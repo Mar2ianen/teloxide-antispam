@@ -17,6 +17,7 @@ embedding = ["dep:anyhow"]
 scoring = ["unicode", "dep:anyhow", "dep:chrono", "dep:teloxide-statistics"]
 cas = ["dep:reqwest", "dep:tracing"]
 url = ["dep:teloxide-url"]
+flood = []
 
 [[example]]
 name = "score_text"

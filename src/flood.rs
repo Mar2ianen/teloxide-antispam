@@ -334,7 +334,9 @@ impl ExactWindow {
     ///
     /// Capacity overflow is observable and taints the window until the lost
     /// event expires. The event is not retained and the error must not be
-    /// interpreted as a zero count.
+    /// interpreted as a zero count. On a later accepted observation, returns
+    /// `Ok(None)` while the window is still incomplete, then `Ok(Some(count))`
+    /// once every unretained event has expired.
     pub fn observe(
         &mut self,
         at: EventTimeMicros,

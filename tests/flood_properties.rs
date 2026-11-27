@@ -55,6 +55,63 @@ proptest! {
     }
 
     #[test]
+    fn exact_window_overflow_sequences_never_expose_a_partial_count(
+        deltas in prop::collection::vec(0_u32..20, 1..100),
+        weights in prop::collection::vec(1_u32..=5, 1..100),
+        window_size in 1_u64..100,
+        capacity in 1_usize..10,
+    ) {
+        let len = deltas.len().min(weights.len());
+        let mut window = ExactWindow::new(window_size, capacity).unwrap();
+        let mut retained = Vec::<(u64, u32)>::new();
+        let mut history = Vec::<(u64, u32)>::new();
+        let mut dropped = Vec::<u64>::new();
+        let mut at = 0_u64;
+
+        for (delta, weight) in deltas.into_iter().zip(weights).take(len) {
+            at += u64::from(delta);
+            let cutoff = at.checked_sub(window_size);
+            retained.retain(|(time, _)| cutoff.is_none_or(|lower| *time > lower));
+            history.push((at, weight));
+
+            if retained.len() == capacity {
+                prop_assert_eq!(
+                    window.observe(at, weight),
+                    Err(teloxide_antispam::flood::WindowError::CapacityExceeded)
+                );
+                dropped.push(at);
+            } else {
+                retained.push((at, weight));
+                let lost_is_live = dropped.iter().any(|time| {
+                    cutoff.is_none_or(|lower| *time > lower) && *time <= at
+                });
+                let expected = if lost_is_live {
+                    None
+                } else {
+                    Some(history.iter()
+                        .filter(|(time, _)| cutoff.is_none_or(|lower| *time > lower) && *time <= at)
+                        .map(|(_, weight)| u64::from(*weight))
+                        .sum::<u64>())
+                };
+                prop_assert_eq!(window.observe(at, weight), Ok(expected));
+            }
+
+            let lost_is_live = dropped.iter().any(|time| {
+                cutoff.is_none_or(|lower| *time > lower) && *time <= at
+            });
+            let expected = if lost_is_live {
+                None
+            } else {
+                Some(history.iter()
+                    .filter(|(time, _)| cutoff.is_none_or(|lower| *time > lower) && *time <= at)
+                    .map(|(_, weight)| u64::from(*weight))
+                    .sum::<u64>())
+            };
+            prop_assert_eq!(window.count_at(at).unwrap(), expected);
+        }
+    }
+
+    #[test]
     fn weighted_mean_matches_full_history_oracle(
         deltas in prop::collection::vec(1_u32..10_000, 1..100),
         values in prop::collection::vec(-10_000_i32..10_000, 1..100),

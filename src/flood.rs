@@ -335,7 +335,11 @@ impl ExactWindow {
     /// Capacity overflow is observable and taints the window until the lost
     /// event expires. The event is not retained and the error must not be
     /// interpreted as a zero count.
-    pub fn observe(&mut self, at: EventTimeMicros, weight: u32) -> Result<u64, WindowError> {
+    pub fn observe(
+        &mut self,
+        at: EventTimeMicros,
+        weight: u32,
+    ) -> Result<Option<u64>, WindowError> {
         if weight == 0 {
             return Err(WindowError::ZeroEventWeight);
         }
@@ -391,7 +395,7 @@ impl ExactWindow {
         self.events.push_back((at, weight));
         self.retained_weight = next_weight;
         self.last_at = Some(at);
-        Ok(self.retained_weight)
+        self.count_at(at)
     }
 
     /// Returns the exact count, or `None` while a dropped event could still
@@ -996,10 +1000,10 @@ mod tests {
     #[test]
     fn exact_window_uses_open_lower_and_closed_upper_boundaries() {
         let mut window = super::ExactWindow::new(1_000, 4).unwrap();
-        assert_eq!(window.observe(0, 1), Ok(1));
-        assert_eq!(window.observe(999, 2), Ok(3));
+        assert_eq!(window.observe(0, 1), Ok(Some(1)));
+        assert_eq!(window.observe(999, 2), Ok(Some(3)));
         assert_eq!(window.count_at(999), Ok(Some(3)));
-        assert_eq!(window.observe(1_000, 1), Ok(3));
+        assert_eq!(window.observe(1_000, 1), Ok(Some(3)));
         assert_eq!(window.count_at(1_000), Ok(Some(3)));
     }
 
@@ -1008,11 +1012,23 @@ mod tests {
         use super::WindowError;
 
         let mut window = super::ExactWindow::new(10, 1).unwrap();
-        assert_eq!(window.observe(2, 1), Ok(1));
+        assert_eq!(window.observe(2, 1), Ok(Some(1)));
         assert_eq!(window.observe(3, 1), Err(WindowError::CapacityExceeded));
         assert_eq!(window.count_at(12), Ok(None));
         assert_eq!(window.count_at(13), Ok(Some(0)));
-        assert_eq!(window.observe(13, 1), Ok(1));
+        assert_eq!(window.observe(13, 1), Ok(Some(1)));
+    }
+
+    #[test]
+    fn exact_window_observe_does_not_report_a_partial_count_after_capacity_loss() {
+        use super::WindowError;
+
+        let mut window = super::ExactWindow::new(10, 1).unwrap();
+        assert_eq!(window.observe(0, 1), Ok(Some(1)));
+        assert_eq!(window.observe(1, 1), Err(WindowError::CapacityExceeded));
+        assert_eq!(window.observe(10, 1), Ok(None));
+        assert_eq!(window.count_at(10), Ok(None));
+        assert_eq!(window.observe(20, 1), Ok(Some(1)));
     }
 
     #[test]

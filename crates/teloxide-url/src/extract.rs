@@ -14,6 +14,11 @@ pub enum Kind {
     Mention,
     /// Native Telegram text_mention identifies an actual user (not a guessed ID).
     UserId(u64),
+    /// A strict custom-emoji URL target. This remains only a candidate until a
+    /// consumer validates its Telegram entity and complete visible emoji label.
+    CustomEmojiFallback {
+        id: u64,
+    },
     Hashtag,
     Cashtag,
     BotCommand,

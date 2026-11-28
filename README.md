@@ -44,10 +44,11 @@ confirmations count once; clearing the local label removes its contribution.
 
 `logreg::load_model` distinguishes legacy `word_12_lower` from
 `unicode_word_char_v2` / `unicode-spam-v2`. The opt-in `unicode-v3` feature
-adds `unicode_word_char_v3` / `unicode-spam-v3-icu4x-2.4-uts39-18`; its model
+adds `unicode_word_char_v3` / `unicode-spam-v3-icu4x-2.4-uts39-18-fold-first`; its model
 metadata must match exactly. V3 uses ICU4X 2.4.0 Unicode 18 properties,
-normalization and full default case folding, plus UTS #39 confusable
-skeletons. It intentionally changes model text (for example, `Straße` folds
+normalization, full default case folding, and ICU 18 word/whitespace
+tokenization; it folds case before applying UTS #39 confusable skeletons. It
+intentionally changes model text (for example, `Straße` folds
 to `strasse`, and mixed-script confusables can map to a common skeleton).
 Existing V2 artifacts must continue to use V2 and cannot be relabeled or
 converted by changing metadata. V3 requires training and validating a new
@@ -164,32 +165,29 @@ changes; ICU4X output is checked against the official corpus. Exhaustive
 scalar comparison also finds four V2/Unicode 18 whitespace differences
 (Python-compatible U+001C–U+001F) and 258 variation-selector differences
 (V2 only strips FE0E/FE0F in words; V3 uses the full Unicode property); the
-Bidi_Control set has zero differences. UTS #39 skeleton is applied once per
-input token as specified. Its output is not guaranteed to be a fixed point:
-V3 maps `Þ` to `þ`, while a second pass maps that output to `p`. Do not feed
-already-preprocessed model text back as if it were raw input.
+Bidi_Control set has zero differences. V3 fixes the sequence as case-fold then UTS #39 skeleton, so `Þ` maps to
+`p` in one pass. Do not feed already-preprocessed model text back as if it
+were raw input.
 
-An isolated release-mode harness compared complete `prepare_text` V2 and
-`prepare_text_v3` calls on identical generated corpora with Rust 1.100.0.
-Each result is median of 19 samples; each sample processes approximately 2 MiB
-(two operations for the 1 MiB inputs). Allocations include the returned model
-view and temporary strings/vectors. The 1 MiB inputs are a repeated Indic
-conjunct sequence and a Rich-like text with emoji and URLs.
+`examples/bench_preprocess.rs` compares complete `prepare_text` V2 and V3
+calls on identical generated corpora with Rust 1.100.0. It takes the median of
+19 samples; each sample processes approximately 2 MiB (two operations for
+the 1 MiB inputs). V3 uses the current fold-first contract. Reproduce with
+`cargo run --release --example bench_preprocess --no-default-features
+--features classifier,unicode-v3 --locked`.
 
-| Corpus | Bytes | V2 latency / MiB/s | V3 latency / MiB/s | V2 allocs / bytes | V3 allocs / bytes |
-|---|---:|---:|---:|---:|---:|
-| ASCII | 8,192 | 1,003,030 ns / 7.79 | 867,873 ns / 9.00 | 8,625 / 586,797 | 6,077 / 483,942 |
-| Cyrillic | 16,256 | 1,417,679 ns / 10.94 | 1,042,206 ns / 14.88 | 8,752 / 869,921 | 5,820 / 704,620 |
-| Mixed Unicode | 11,008 | 824,343 ns / 12.74 | 615,920 ns / 17.04 | 5,164 / 393,321 | 4,281 / 362,951 |
-| Emoji-heavy | 8,320 | 243,595 ns / 32.57 | 187,551 ns / 42.31 | 294 / 144,197 | 152 / 103,873 |
-| Indic adversarial, near 1 MiB | 1,048,572 | 68,037,163 ns / 14.70 | 50,697,811 ns / 19.72 | 699,082 / 28,486,486 | 699,062 / 21,495,980 |
-| Rich-like max input | 1,048,576 | 88,597,250 ns / 11.29 | 68,633,805 ns / 14.57 | 582,581 / 50,171,814 | 384,548 / 43,937,329 |
+| Corpus | Bytes | V2 latency / MiB/s | V3 latency / MiB/s |
+|---|---:|---:|---:|
+| ASCII | 8,184 | 253,978,630 ns / 7.87 | 230,017,207 ns / 8.69 |
+| Cyrillic | 28,600 | 177,156,678 ns / 11.24 | 144,601,208 ns / 13.77 |
+| Mixed Unicode | 16,506 | 176,345,189 ns / 11.34 | 146,779,605 ns / 13.62 |
+| Emoji-heavy | 18,426 | 76,995,467 ns / 25.79 | 57,065,440 ns / 34.80 |
+| Indic adversarial, near 1 MiB | 1,048,575 | 119,520,780 ns / 16.73 | 85,355,446 ns / 23.43 |
+| Rich-like, near 1 MiB | 1,048,560 | 201,513,130 ns / 9.92 | 174,579,463 ns / 11.46 |
 
-Peak RSS was 14,652 KiB for V2 and 16,192 KiB for V3 while the harness kept
-all corpus strings resident. These are local microbenchmark results, not a
-bot-level latency or production memory guarantee; V3 remains opt-in pending
-training on its own model view and consumer-level evaluation.
-
+These are local microbenchmark results, not a bot-level latency or production
+memory guarantee. V3 remains opt-in pending training on its own model view and
+consumer-level evaluation.
 Separate isolated release consumers (one enabling only `unicode`, one only
 `unicode-v3`) measured clean builds at 5.926 s / 8.513 s and no-op incremental
 builds at 0.016 s / 0.022 s. Their binaries were 3,039,272 / 3,555,536 bytes;

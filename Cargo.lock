@@ -1134,6 +1134,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "proptest"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8530004ccb15eae51c7e40009fbe317f341f804db54dc033eec1c50be28cfa0"
+dependencies = [
+ "bitflags",
+ "chacha20",
+ "core_detect",
+ "num-traits",
+ "rand",
+ "rand_xorshift",
+ "regex-syntax",
+ "unarray",
+]
+
+[[package]]
 name = "psm"
 version = "0.1.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1237,6 +1253,15 @@ name = "rand_pcg"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "caa0f4137e1c0a72f4c651489402276c8e8e1cf081f3b0ba156d2cbeef09e86a"
+dependencies = [
+ "rand_core",
+]
+
+[[package]]
+name = "rand_xorshift"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "60aa6af80be32871323012e02e6e65f8a7cc7890931ae421d217ad8fe0df2ccf"
 dependencies = [
  "rand_core",
 ]
@@ -1813,7 +1838,7 @@ checksum = "07dd1d452d2c3dc94a4e1c5c3c9a3cc88c2ef5926674b75881e454c4dc3a14c4"
 [[package]]
 name = "teloxide"
 version = "0.21.0-rc.2"
-source = "git+https://github.com/Mar2ianen/teloxide-fork?rev=ce840d82daf47c3e9b9ee16fb05d62fbe0c24727#ce840d82daf47c3e9b9ee16fb05d62fbe0c24727"
+source = "git+https://github.com/Mar2ianen/teloxide-fork?rev=76591fdf626974fac492f1f8eb411b3e4f4d7601#76591fdf626974fac492f1f8eb411b3e4f4d7601"
 dependencies = [
  "bytes",
  "derive_more",
@@ -1841,6 +1866,7 @@ dependencies = [
  "anyhow",
  "base64 0.22.1",
  "chrono",
+ "proptest",
  "regex",
  "reqwest",
  "serde",
@@ -1856,7 +1882,7 @@ dependencies = [
 [[package]]
 name = "teloxide-core"
 version = "0.17.0-rc.2"
-source = "git+https://github.com/Mar2ianen/teloxide-fork?rev=ce840d82daf47c3e9b9ee16fb05d62fbe0c24727#ce840d82daf47c3e9b9ee16fb05d62fbe0c24727"
+source = "git+https://github.com/Mar2ianen/teloxide-fork?rev=76591fdf626974fac492f1f8eb411b3e4f4d7601#76591fdf626974fac492f1f8eb411b3e4f4d7601"
 dependencies = [
  "bitflags",
  "bytes",
@@ -2113,6 +2139,12 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "unarray"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
 
 [[package]]
 name = "unicase"

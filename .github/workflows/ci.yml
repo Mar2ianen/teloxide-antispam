@@ -3,9 +3,13 @@ on: [push, pull_request]
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PROPTEST_CASES: 2048
+      PROPTEST_RNG_SEED: "1"
     strategy:
       matrix:
-        features: [minimal, unicode, classifier, embedding, scoring, cas, url, default, all]
+        features: [minimal, unicode, classifier, embedding, scoring, cas, url, flood, default, all]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

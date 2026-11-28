@@ -44,8 +44,14 @@ pub struct TextObservations {
     pub format_chars: usize,
     pub bidi_controls: usize,
     pub non_ascii_whitespace: usize,
+    /// Removed from the NFKC view; compatibility expansions can exceed the
+    /// number of source scalars.
     pub removed_invisible_chars: usize,
+    /// Removed from the NFKC view; compatibility expansions can exceed the
+    /// number of source scalars.
     pub removed_word_variation_selectors: usize,
+    /// Ordinary marks removed from the NFKC view; compatibility expansions
+    /// can make this exceed the number of source scalars.
     pub removed_stacked_marks: usize,
     pub mixed_script_words: usize,
     pub homoglyph_chars: usize,
@@ -741,6 +747,22 @@ mod unicode_v3_conformance_tests {
             rows += 1;
         }
         assert!(rows > 20_000, "official normalization corpus is truncated");
+    }
+
+    #[test]
+    fn nfkc_expansion_can_create_stacked_marks_from_one_source_scalar() {
+        // U+FC60 compatibility-normalizes to a space and two combining marks.
+        // The diagnostic counts marks in the normalized view, so it can exceed
+        // the number of source scalars without indicating duplicate counting.
+        let prepared = prepare_text_v3("\u{fc60}");
+        assert_eq!(prepared.flags.removed_stacked_marks, 2);
+        assert!(prepared.canonical.is_empty());
+    }
+
+    #[test]
+    fn unicode_18_nfkc_scalar_expansion_bound_is_eighteen() {
+        let nfkc = ComposingNormalizer::new_nfkc();
+        assert_eq!(nfkc.normalize("\u{fdfa}").chars().count(), 18);
     }
 
     #[test]

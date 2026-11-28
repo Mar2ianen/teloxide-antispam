@@ -589,14 +589,24 @@ fn is_variation_selector(ch: char) -> bool {
     matches!(ch, '\u{fe0e}' | '\u{fe0f}')
 }
 
-/// Word 1–2 without lemmatization. Single-letter words and underscores remain.
-pub fn word_tokens(text: &str) -> Vec<String> {
+/// Returns the ordered word sequence without n-gram expansion.
+///
+/// Flood analysis uses this sequence to build its own contextual features.
+/// Single-letter words and underscores remain.
+pub fn word_sequence(text: &str) -> Vec<String> {
     let lower = text.to_lowercase();
-    let words: Vec<&str> = lower
+    lower
         .split(|ch| !is_word_char(ch))
         .filter(|word| !word.is_empty())
-        .collect();
-    let mut tokens: Vec<String> = words.iter().map(|word| (*word).to_owned()).collect();
+        .map(str::to_owned)
+        .collect()
+}
+
+/// Word unigram and bigram features for the existing classifier. Keep this
+/// representation stable when adding consumers that need the raw sequence.
+pub fn word_tokens(text: &str) -> Vec<String> {
+    let words = word_sequence(text);
+    let mut tokens = words.clone();
     tokens.extend(
         words
             .windows(2)
@@ -737,6 +747,7 @@ mod tests {
         assert_eq!(char_tokens("я"), [" я "]);
         assert_eq!(char_tokens("лс"), [" лс", "лс ", " лс "]);
         assert!(char_tokens("доход").contains(&"оход".to_owned()));
+        assert_eq!(word_sequence("a b c"), ["a", "b", "c"]);
     }
 
     #[cfg(feature = "unicode-v3")]

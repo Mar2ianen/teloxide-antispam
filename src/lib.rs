@@ -11,6 +11,9 @@ pub mod categories;
 #[cfg(feature = "embedding")]
 pub mod embedding;
 pub mod external;
+/// Pure time-decayed primitives used by conversation flood detectors.
+#[cfg(feature = "flood")]
+pub mod flood;
 #[cfg(feature = "classifier")]
 pub mod logreg;
 pub mod policy;

@@ -14,7 +14,7 @@ teloxide = ["dep:teloxide"]
 [dependencies]
 url = "2.5"
 linkify = "0.11"
-teloxide = { git = "https://github.com/Mar2ianen/teloxide-fork", rev = "ce840d82daf47c3e9b9ee16fb05d62fbe0c24727", default-features = false, optional = true, features = ["rich-text"] }
+teloxide = { git = "https://github.com/Mar2ianen/teloxide-fork", rev = "76591fdf626974fac492f1f8eb411b3e4f4d7601", default-features = false, optional = true, features = ["rich-text"] }
 
 [dev-dependencies]
 serde_json = "1"

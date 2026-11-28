@@ -18,11 +18,17 @@ the consuming application's responsibility.
 | `scoring` | Assessment, profile/ID/channel signals, component scoring; enables `unicode` |
 | `cas` | Optional CAS HTTP lookup; no networking dependency otherwise |
 | `url` | Optional `teloxide-url` parser; URL data is not scored automatically |
+| `flood` | Pure event-time EWMA and bounded conversation-window metrics; no Telegram or enforcement |
 
 ICU4X 2.4.0 requires Rust 1.88 or newer when `unicode-v3` is enabled. Other
 feature sets do not activate the direct ICU4X dependencies.
 
 Default features: `scoring`, `classifier`, `embedding`. Minimal classifier integration:
+
+The opt-in `flood` feature contains evidence-only temporal primitives and a
+bounded conversation snapshot analyzer. It does not persist state, select
+moderation thresholds, or enforce actions. See [FLOOD.md](docs/FLOOD.md) for
+event-time, completeness, and resource-bound contracts.
 
 ```toml
 teloxide-antispam = { git = "https://github.com/Mar2ianen/teloxide-antispam", tag = "v0.2.0", default-features = false, features = ["classifier"] }

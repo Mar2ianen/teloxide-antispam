@@ -1,0 +1,20 @@
+name: flood-property-nightly
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  workflow_dispatch:
+
+jobs:
+  flood-properties:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PROPTEST_CASES: 20000
+      PROPTEST_RNG_SEED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run bounded flood-core property oracle
+        run: cargo test --locked --no-default-features --features flood --test flood_properties

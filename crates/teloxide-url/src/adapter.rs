@@ -9,6 +9,9 @@ use crate::extract::MAX_URL_BYTES;
 use crate::{Found, Kind, MAX_ITEMS, Source, find, parse_telegram_link, parse_url, utf16_range};
 
 fn custom_emoji_candidate_id(value: &str) -> Option<u64> {
+    // `TextLink` exposes reqwest::Url, so serde has already normalized the
+    // source URI before this adapter receives it. Strict URI guarantees here
+    // apply to this normalized representation, not to original JSON bytes.
     match parse_telegram_link(value) {
         Some(crate::TelegramLink::CustomEmojiFallback { id }) => Some(id),
         _ => None,
@@ -463,6 +466,27 @@ mod tests {
         assert_eq!(plain.len(), 1);
         assert_eq!(plain[0].kind, Kind::Url);
         assert_eq!(plain[0].source, Source::VisibleText);
+    }
+
+    #[test]
+    fn custom_emoji_entity_contract_applies_to_reqwest_normalized_url() {
+        // MessageEntity stores reqwest::Url, which canonicalizes scheme/host
+        // before this adapter sees the value. The original JSON spelling is
+        // therefore outside this parser's guarantee; strictness applies to
+        // the normalized Url representation supplied by teloxide.
+        let entity: MessageEntity = serde_json::from_value(serde_json::json!({
+            "type":"text_link","offset":0,"length":2,"url":"TG://emoji?id=42"
+        }))
+        .unwrap();
+        let MessageEntityKind::TextLink { url } = &entity.kind else {
+            panic!("expected text_link entity");
+        };
+        assert_eq!(url.as_str(), "tg://emoji?id=42");
+
+        let found = extract_text_entities("😀", &[entity]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].custom_emoji_fallback_id, Some(42));
+        assert_eq!(found[0].span, Some(0..4));
     }
 
     #[test]

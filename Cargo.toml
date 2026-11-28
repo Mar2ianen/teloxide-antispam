@@ -23,6 +23,10 @@ url = ["dep:teloxide-url"]
 name = "score_text"
 required-features = ["classifier", "embedding"]
 
+[[example]]
+name = "bench_preprocess"
+required-features = ["unicode-v3"]
+
 [lib]
 name = "teloxide_antispam"
 path = "src/lib.rs"

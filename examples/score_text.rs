@@ -63,9 +63,7 @@ fn main() -> anyhow::Result<()> {
         })
         .transpose()?;
     let preprocessing = if let Some(model) = &model {
-        let model_version = model
-            .preprocessing_version()
-            .unwrap_or("legacy-word-12-lower");
+        let model_version = model.inference_preprocessing_version();
         if let Some(requested) = requested_preprocessing.as_deref()
             && requested != "v2"
             && requested != "v3"
@@ -110,7 +108,9 @@ fn main() -> anyhow::Result<()> {
                 Some(preprocess::prepare_text_v3(&input.text))
             }
             #[cfg(not(feature = "unicode-v3"))]
-            None if preprocessing == "v3" => {
+            None if preprocessing == "v3"
+                || preprocessing == preprocess::PREPROCESSING_VERSION_V3 =>
+            {
                 anyhow::bail!("V3 preprocessing requires the unicode-v3 feature")
             }
             None => None,

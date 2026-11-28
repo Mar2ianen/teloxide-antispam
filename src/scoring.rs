@@ -8,7 +8,7 @@ use crate::assessment::{
 use crate::calibration::LinearScoreCalibration;
 use crate::categories::{CategoryScores, SpamCategory};
 use crate::external::EXTERNAL_SCORE_CAP;
-use crate::preprocess::{PREPROCESSING_VERSION, TextObservations};
+use crate::preprocess::TextObservations;
 use crate::text::normalize_channel_evidence;
 
 #[allow(dead_code)]
@@ -32,6 +32,9 @@ pub struct FirstMessageScoreContext {
     /// `None` when the consumer disables the classifier.
     pub linear_spam_probability: Option<f64>,
     pub linear_spam_model_version: Option<String>,
+    /// Exact preprocessing contract reported with the probability. `None`
+    /// means the consumer did not provide model provenance.
+    pub linear_spam_preprocessing_version: Option<String>,
     pub linear_spam_calibration: Option<LinearScoreCalibration>,
     /// Frozen-encoder spam probability (`embedding` module).
     /// `None` when the consumer has no head or the vector was unusable.
@@ -452,7 +455,7 @@ fn score_first_message(
             "reputation_calibration": reputation_calibration,
             "category_scores": context.category_scores,
             "suspected_categories": suspected,
-            "text_preprocessing_version": PREPROCESSING_VERSION,
+            "text_preprocessing_version": context.linear_spam_preprocessing_version,
             "text_observations": context.text_observations,
         }));
     }
@@ -745,6 +748,7 @@ mod tests {
             FirstMessageScoreContext {
                 linear_spam_probability: Some(0.2),
                 linear_spam_model_version: Some("synthetic-v2".to_owned()),
+                linear_spam_preprocessing_version: Some("unicode-spam-v3-test".to_owned()),
                 text_observations: Some(
                     crate::preprocess::prepare_text("#Тeлeфoны до\u{200b}ход").flags,
                 ),
@@ -767,6 +771,10 @@ mod tests {
         assert_eq!(
             observed.first_message_signals[0]["linear_spam_model_version"],
             "synthetic-v2"
+        );
+        assert_eq!(
+            observed.first_message_signals[0]["text_preprocessing_version"],
+            "unicode-spam-v3-test"
         );
         assert!(
             observed.first_message_signals[0]["text_observations"]["homoglyph_chars"]

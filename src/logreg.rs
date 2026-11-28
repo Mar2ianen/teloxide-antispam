@@ -41,6 +41,13 @@ impl LinearSpamModel {
         }
     }
 
+    /// Exact preprocessing contract used by this model, including legacy
+    /// word-only models that predate the versioned Unicode pipelines.
+    pub fn inference_preprocessing_version(&self) -> &'static str {
+        self.preprocessing_version()
+            .unwrap_or("legacy-word-12-lower")
+    }
+
     /// Prepare with the exact Unicode pipeline selected by this model.
     pub fn prepare_text(&self, text: &str) -> Option<PreparedText> {
         match &self.features {
@@ -417,6 +424,10 @@ mod tests {
             model.preprocessing_version(),
             Some(PREPROCESSING_VERSION_V3)
         );
+        assert_eq!(
+            model.inference_preprocessing_version(),
+            PREPROCESSING_VERSION_V3
+        );
         assert!(model.tokens("Straße").word.contains(&"strasse".to_owned()));
 
         let mut invalid = unicode_v3_export();
@@ -431,6 +442,10 @@ mod tests {
     fn v2_model_metadata_and_tokens_remain_pinned() {
         let model = load_model(&unicode_export().to_string()).unwrap();
         assert_eq!(model.preprocessing_version(), Some(PREPROCESSING_VERSION));
+        assert_eq!(
+            model.inference_preprocessing_version(),
+            PREPROCESSING_VERSION
+        );
         assert_eq!(model.prepare_text("Straße").unwrap().canonical, "straße");
         assert!(model.tokens("Straße").word.contains(&"straße".to_owned()));
     }
@@ -462,6 +477,10 @@ mod tests {
     #[test]
     fn legacy_model_keeps_raw_word_view_and_zero_idf_stays_finite() {
         let model = load_model(r#"{"version":"legacy","analyzer":"word_12_lower","vocab":{"доход":1.0},"coef":[1.0],"intercept":0.0}"#).unwrap();
+        assert_eq!(
+            model.inference_preprocessing_version(),
+            "legacy-word-12-lower"
+        );
         assert_eq!(spam_probability(&model, "дoход"), 0.5);
         let zero = load_model(r#"{"version":"zero","analyzer":"word_12_lower","vocab":{"доход":0.0},"coef":[1.0],"intercept":0.0}"#).unwrap();
         assert_eq!(spam_probability(&zero, "доход"), 0.5);

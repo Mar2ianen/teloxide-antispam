@@ -34,6 +34,12 @@ pub enum TelegramLink {
         value: String,
     },
     UserId(u64),
+    /// Strict client-side `tg://emoji?id=<decimal u64>` candidate.
+    /// This identifies a URL target only; the caller must validate its label
+    /// and message entity before treating it as a custom-emoji occurrence.
+    CustomEmojiFallback {
+        id: u64,
+    },
     BotStart {
         username: String,
         kind: BotStartKind,
@@ -55,6 +61,9 @@ pub enum TelegramLink {
 /// Strictly recognize Telegram domains and `tg:` URIs.
 /// Does not perform network resolution of names, users, channels, or invites.
 pub fn parse_telegram_link(raw: &str) -> Option<TelegramLink> {
+    if let Some(id) = parse_custom_emoji_uri(raw) {
+        return Some(TelegramLink::CustomEmojiFallback { id });
+    }
     let url = parse_url(raw)?;
     if url.scheme() == "tg" {
         return Some(parse_tg(&url));
@@ -174,6 +183,17 @@ pub fn parse_telegram_link(raw: &str) -> Option<TelegramLink> {
         });
     }
     Some(TelegramLink::Profile { username })
+}
+
+/// Parse the exact URI spelling used by the documented client compatibility
+/// format. Does not parse or normalize a URL and never performs network I/O.
+/// The 20-digit cap is a deliberate bound (valid u64 decimal strings fit).
+pub fn parse_custom_emoji_uri(raw: &str) -> Option<u64> {
+    let digits = raw.strip_prefix("tg://emoji?id=")?;
+    if digits.is_empty() || digits.len() > 20 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<u64>().ok().filter(|id| *id > 0)
 }
 
 fn parse_tg(url: &Url) -> TelegramLink {
@@ -346,6 +366,44 @@ mod tests {
             parse_telegram_link("tg://user?id=42"),
             Some(TelegramLink::UserId(42))
         ));
+    }
+
+    #[test]
+    fn custom_emoji_uri_parser_is_strict_and_canonicalizes_decimal_ids() {
+        assert_eq!(parse_custom_emoji_uri("tg://emoji?id=42"), Some(42));
+        assert_eq!(parse_custom_emoji_uri("tg://emoji?id=00042"), Some(42));
+        assert_eq!(
+            parse_custom_emoji_uri("tg://emoji?id=18446744073709551615"),
+            Some(u64::MAX)
+        );
+        for invalid in [
+            "tg://emoji?id=",
+            "tg://emoji?id=0",
+            "tg://emoji?id=18446744073709551616",
+            "tg://emoji?id=000000000000000000042",
+            "tg://emoji?id=٤٢",
+            "tg://emoji?id=%34%32",
+            "tg://emoji?id=42&x=1",
+            "tg://emoji?id=42?id=1",
+            "tg://emoji?id=42#fragment",
+            "tg://emoji/42?id=42",
+            "tg://user@emoji?id=42",
+            "tg://emoji.evil.example?id=42",
+            "TG://emoji?id=42",
+            " tg://emoji?id=42",
+        ] {
+            assert_eq!(parse_custom_emoji_uri(invalid), None, "{invalid}");
+        }
+        assert_eq!(
+            parse_telegram_link("tg://emoji?id=00042"),
+            Some(TelegramLink::CustomEmojiFallback { id: 42 })
+        );
+        for invalid in ["tg://emoji?id=%34%32", "tg://emoji?id=42&x=1"] {
+            assert!(!matches!(
+                parse_telegram_link(invalid),
+                Some(TelegramLink::CustomEmojiFallback { .. })
+            ));
+        }
     }
     #[test]
     fn hidden_secrets_are_not_unwrapped_into_external_urls() {

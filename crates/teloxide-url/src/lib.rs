@@ -10,4 +10,6 @@ mod telegram;
 pub mod adapter;
 
 pub use extract::{Found, Kind, MAX_ITEMS, Source, find, find_urls, parse_url, utf16_range};
-pub use telegram::{BotStartKind, TelegramLink, TelegramPeer, parse_telegram_link};
+pub use telegram::{
+    BotStartKind, TelegramLink, TelegramPeer, parse_custom_emoji_uri, parse_telegram_link,
+};

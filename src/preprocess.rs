@@ -24,8 +24,7 @@ use icu_properties::{
 };
 
 pub const PREPROCESSING_VERSION: &str = "unicode-spam-v2";
-#[cfg(feature = "unicode-v3")]
-pub const PREPROCESSING_VERSION_V3: &str = "unicode-spam-v3-icu4x-2.4-uts39-18";
+pub const PREPROCESSING_VERSION_V3: &str = "unicode-spam-v3-icu4x-2.4-uts39-18-fold-first";
 const MIN_CHAR_NGRAM: usize = 3;
 const MAX_CHAR_NGRAM: usize = 5;
 const CONFUSABLES: &str = "ABCEHKMOPTXYaceopxyΑΒΕΗΚΜΟΡΤΥΧορχ";
@@ -304,11 +303,15 @@ fn normalize_word_v3(
         flags.mixed_script_words += 1;
     }
 
-    let skeleton: String = unicode_security::skeleton(word).collect();
-    if skeleton == word {
-        return word.to_owned();
+    // Case folding before the skeleton makes the model view explicitly
+    // case-insensitive. UTS #39 defines skeleton(X), but does not prescribe
+    // classifier preprocessing order; V3 fixes this order as fold → skeleton.
+    let folded = CaseMapper::new().fold_string(word).into_owned();
+    let skeleton: String = unicode_security::skeleton(&folded).collect();
+    if skeleton == folded {
+        return folded;
     }
-    let changed = word
+    let changed = folded
         .chars()
         .zip(skeleton.chars())
         .filter(|(before, after)| before != after)
@@ -625,6 +628,52 @@ pub fn char_tokens(text: &str) -> Vec<String> {
     tokens
 }
 
+/// Unicode 18 word 1–2 analyzer used only by V3 models. V2 tokenization stays
+/// pinned to the Unicode crates and behavior it shipped with.
+#[cfg(feature = "unicode-v3")]
+pub fn word_tokens_v3(text: &str) -> Vec<String> {
+    let folded = CaseMapper::new().fold_string(text);
+    let categories = CodePointMapData::<IcuGeneralCategory>::new();
+    let words: Vec<String> = folded
+        .split(|ch| !is_word_core_v3(ch, &categories))
+        .filter(|word| !word.is_empty())
+        .map(str::to_owned)
+        .collect();
+    let mut tokens = words.clone();
+    tokens.extend(
+        words
+            .windows(2)
+            .map(|pair| format!("{} {}", pair[0], pair[1])),
+    );
+    tokens
+}
+
+/// Unicode 18 char_wb 3–5 analyzer used only by V3 models. Windows are over
+/// Unicode scalar values, matching the established V2 n-gram shape.
+#[cfg(feature = "unicode-v3")]
+pub fn char_tokens_v3(text: &str) -> Vec<String> {
+    let folded = CaseMapper::new().fold_string(text);
+    let whitespace = CodePointSetData::new::<WhiteSpace>();
+    let mut tokens = Vec::new();
+    for word in folded
+        .split(|ch| is_whitespace_v3(ch, whitespace))
+        .filter(|word| !word.is_empty())
+    {
+        let chars: Vec<char> = std::iter::once(' ')
+            .chain(word.chars())
+            .chain(std::iter::once(' '))
+            .collect();
+        for n in MIN_CHAR_NGRAM..=MAX_CHAR_NGRAM {
+            if n >= chars.len() {
+                tokens.push(chars.iter().collect());
+                break;
+            }
+            tokens.extend(chars.windows(n).map(|window| window.iter().collect()));
+        }
+    }
+    tokens
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -688,6 +737,32 @@ mod tests {
         assert_eq!(char_tokens("я"), [" я "]);
         assert_eq!(char_tokens("лс"), [" лс", "лс ", " лс "]);
         assert!(char_tokens("доход").contains(&"оход".to_owned()));
+    }
+
+    #[cfg(feature = "unicode-v3")]
+    #[test]
+    fn v3_tokenizers_use_full_casefold_while_v2_remains_pinned() {
+        assert!(word_tokens("Straße").contains(&"straße".to_owned()));
+        assert!(word_tokens_v3("Straße").contains(&"strasse".to_owned()));
+        assert!(
+            char_tokens_v3("Straße")
+                .iter()
+                .any(|token| token.contains("ss"))
+        );
+        assert_eq!(word_tokens("Straße"), vec!["straße"]);
+    }
+
+    #[cfg(feature = "unicode-v3")]
+    #[test]
+    fn v3_folds_case_before_confusable_skeleton() {
+        // UTS #39 maps capital I to a lowercase l, while lowercase i remains
+        // i. V3's explicit fold-first contract must make these case variants
+        // identical to a case-insensitive classifier.
+        assert_eq!(
+            prepare_text_v3("I").canonical,
+            prepare_text_v3("i").canonical
+        );
+        assert_eq!(prepare_text_v3("I").flags.homoglyph_chars, 0);
     }
 
     #[test]
@@ -1117,7 +1192,7 @@ mod unicode_v3_conformance_tests {
         assert_eq!(PREPROCESSING_VERSION, "unicode-spam-v2");
         assert_eq!(
             PREPROCESSING_VERSION_V3,
-            "unicode-spam-v3-icu4x-2.4-uts39-18"
+            "unicode-spam-v3-icu4x-2.4-uts39-18-fold-first"
         );
         let v2 = prepare_text("Straße");
         let v3 = prepare_text_v3("Straße");
@@ -1131,13 +1206,13 @@ mod unicode_v3_conformance_tests {
     }
 
     #[test]
-    fn uts39_skeleton_is_applied_once_not_iterated_to_a_fixed_point() {
-        // UTS #39 maps the V3-folded thorn to itself in this pass, while a
-        // second skeleton pass maps that output to ASCII "p". The model view
-        // deliberately applies the specified skeleton operation once.
-        let once = prepare_text_v3("Þ").canonical;
-        assert_eq!(once, "þ");
-        assert_eq!(prepare_text_v3(&once).canonical, "p");
+    fn v3_casefold_then_skeleton_has_a_stable_model_view() {
+        // The fixed pipeline folds thorn to lowercase first, after which the
+        // UTS #39 mapping produces ASCII p. The resulting canonical view is
+        // stable under another pass.
+        let canonical = prepare_text_v3("Þ").canonical;
+        assert_eq!(canonical, "p");
+        assert_eq!(prepare_text_v3(&canonical).canonical, canonical);
     }
 
     proptest::proptest! {

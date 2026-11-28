@@ -15,20 +15,24 @@ label or apply V3 at inference. `unicode-v3` is a separately versioned,
 opt-in model view: training a V3 model requires generating all training,
 validation, and test model inputs with `prepare_text_v3`, exporting
 `analyzer="unicode_word_char_v3"` and
-`preprocessing="unicode-spam-v3-icu4x-2.4-uts39-18"`, and re-running parity
-and operating-point evaluation. V2 weights cannot be converted by metadata
-editing because NFKC/property data, full case folding, and UTS #39 skeletons
-change the feature strings. Keep the original raw text and the V2 artifact
-available during any consumer migration; deploy V3 only with a separately
-validated V3 artifact and rollback path.
+`preprocessing="unicode-spam-v3-icu4x-2.4-uts39-18-fold-first"`, and
+re-running parity and operating-point evaluation. V2 weights cannot be
+converted by metadata editing because NFKC/property data, full case folding,
+and UTS #39 skeletons change the feature strings and V3's ICU 18
+word/whitespace tokenization. V3 folds case before applying the UTS #39
+skeleton so case variants share the same classifier projection; V2 retains
+its exact historical order and tokenizers. Keep the original raw text and V2
+artifact available during any consumer migration; deploy V3 only with a
+separately validated V3 artifact and rollback path.
 
 The Unicode 18 conformance/differential suite currently reports 270 differing
 NFKC corpus input columns out of 100,855 versus `unicode-normalization`
 0.1.25, and 212 differing full-fold mappings out of 1,606 versus Rust
 `to_lowercase()`. These are expected behavior changes, not a parity claim.
-UTS #39 skeleton is applied once to each token; it is not a fixed-point
-operation (`Þ` produces `þ`, while reprocessing that output produces `p`).
-Use raw source text for scoring, never a previous V3 model view.
+V3 case-folds before applying the UTS #39 skeleton once to each token (`Þ`
+produces `p` in the V3 projection). The complete V3 preprocessing/tokenizer
+version is part of model metadata. Use raw source text for scoring, never a
+previous V3 model view.
 
 The released artifact uses only the published ALT labels linked in the
 [model card](ALT_MODEL_CARD.md). Private challenge data never enters fitting.
@@ -38,7 +42,10 @@ The released artifact uses only the published ALT labels linked in the
    text privately. Model input is canonical text plus newline and the compact
    auxiliary view when present. The Rust `score_text` example without a model
    outputs canonical/compact/flags as JSONL; consumers can construct this model
-   input without a separate Python normalization implementation.
+   input without a separate Python normalization implementation. For
+   no-model V3 parity, pass `--preprocessing v3`; when a model is loaded, the
+   harness selects its preprocessing metadata and emits that version and the
+   exact scored word/character tokens.
 3. For template grouping only, replace URLs/advertised contacts with a contact
    marker and numbers with a number marker; collapse whitespace and hash the
    result. Exclude groups with conflicting class labels. Never use these masked

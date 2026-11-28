@@ -73,10 +73,13 @@ JSONL parity harness (`id` and `text` on stdin):
 cargo run --example score_text -- path/to/model.json
 ```
 
-Without a model argument it outputs preprocessing only. With a text model
-and an embedding head it also outputs `embedding_probability` and a
-`fused_probability` (equal-weight logit fusion). No Telegram or SQL
-requests are made. Models and private corpora are not embedded in the library.
+Without a model argument it defaults to V2; select V3 with
+`--preprocessing v3`. It emits the selected preprocessing view and exact
+word/character tokens. With a text model it follows that model's preprocessing
+metadata and emits the version and actual tokens used for scoring. With an
+embedding head it also outputs `embedding_probability` and `fused_probability`
+(equal-weight logit fusion). No Telegram or SQL requests are made. Models and
+private corpora are not embedded in the library.
 For the ported v2 candidate, Python/Rust parity was checked on 32,253 texts:
 zero model-view differences and maximum probability error 3.11e-15. This is
 an artifact-specific result, not a guarantee for every Unicode code point.

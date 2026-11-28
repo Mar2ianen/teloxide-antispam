@@ -3,9 +3,13 @@ use std::collections::HashMap;
 use crate::calibration::LinearScoreCalibration;
 use serde::Deserialize;
 
-use crate::preprocess::{PREPROCESSING_VERSION, char_tokens, prepare_text, word_tokens};
+use crate::preprocess::{
+    PREPROCESSING_VERSION, PreparedText, char_tokens, prepare_text, word_tokens,
+};
 #[cfg(feature = "unicode-v3")]
-use crate::preprocess::{PREPROCESSING_VERSION_V3, prepare_text_v3};
+use crate::preprocess::{
+    PREPROCESSING_VERSION_V3, char_tokens_v3, prepare_text_v3, word_tokens_v3,
+};
 
 pub const UNICODE_WORD_CHAR_ANALYZER: &str = "unicode_word_char_v2";
 #[cfg(feature = "unicode-v3")]
@@ -22,6 +26,66 @@ pub struct LinearSpamModel {
     pub calibration: LinearScoreCalibration,
     intercept: f64,
     features: FeatureModel,
+}
+
+impl LinearSpamModel {
+    /// Preprocessing contract selected by this model; legacy models have none.
+    pub fn preprocessing_version(&self) -> Option<&'static str> {
+        match &self.features {
+            FeatureModel::UnicodeWordChar { preprocessing, .. } => Some(match preprocessing {
+                UnicodePreprocessing::V2 => PREPROCESSING_VERSION,
+                #[cfg(feature = "unicode-v3")]
+                UnicodePreprocessing::V3 => PREPROCESSING_VERSION_V3,
+            }),
+            FeatureModel::Legacy(_) => None,
+        }
+    }
+
+    /// Prepare with the exact Unicode pipeline selected by this model.
+    pub fn prepare_text(&self, text: &str) -> Option<PreparedText> {
+        match &self.features {
+            FeatureModel::Legacy(_) => None,
+            FeatureModel::UnicodeWordChar { preprocessing, .. } => Some(match preprocessing {
+                UnicodePreprocessing::V2 => prepare_text(text),
+                #[cfg(feature = "unicode-v3")]
+                UnicodePreprocessing::V3 => prepare_text_v3(text),
+            }),
+        }
+    }
+
+    /// Return the exact tokens scored by the model, grouped by feature block.
+    pub fn tokens(&self, text: &str) -> ModelTokens {
+        match &self.features {
+            FeatureModel::Legacy(_) => ModelTokens {
+                word: tokenize(text),
+                character: Vec::new(),
+            },
+            FeatureModel::UnicodeWordChar { preprocessing, .. } => {
+                let prepared = match preprocessing {
+                    UnicodePreprocessing::V2 => prepare_text(text).model_text(),
+                    #[cfg(feature = "unicode-v3")]
+                    UnicodePreprocessing::V3 => prepare_text_v3(text).model_text(),
+                };
+                match preprocessing {
+                    UnicodePreprocessing::V2 => ModelTokens {
+                        word: word_tokens(&prepared),
+                        character: char_tokens(&prepared),
+                    },
+                    #[cfg(feature = "unicode-v3")]
+                    UnicodePreprocessing::V3 => ModelTokens {
+                        word: word_tokens_v3(&prepared),
+                        character: char_tokens_v3(&prepared),
+                    },
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModelTokens {
+    pub word: Vec<String>,
+    pub character: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -215,7 +279,12 @@ pub fn spam_probability(model: &LinearSpamModel, text: &str) -> f64 {
                 #[cfg(feature = "unicode-v3")]
                 UnicodePreprocessing::V3 => prepare_text_v3(text).model_text(),
             };
-            block_dot(word, word_tokens(&text)) + block_dot(character, char_tokens(&text))
+            let tokens = match preprocessing {
+                UnicodePreprocessing::V2 => (word_tokens(&text), char_tokens(&text)),
+                #[cfg(feature = "unicode-v3")]
+                UnicodePreprocessing::V3 => (word_tokens_v3(&text), char_tokens_v3(&text)),
+            };
+            block_dot(word, tokens.0) + block_dot(character, tokens.1)
         }
     };
     sigmoid(model.intercept + dot)
@@ -344,6 +413,11 @@ mod tests {
     fn v3_export_uses_icu_casefold_and_rejects_cross_version_metadata() {
         let model = load_model(&unicode_v3_export().to_string()).unwrap();
         assert!((spam_probability(&model, "Straße") - sigmoid(2.0)).abs() < 1e-12);
+        assert_eq!(
+            model.preprocessing_version(),
+            Some(PREPROCESSING_VERSION_V3)
+        );
+        assert!(model.tokens("Straße").word.contains(&"strasse".to_owned()));
 
         let mut invalid = unicode_v3_export();
         invalid["preprocessing"] = serde_json::json!(PREPROCESSING_VERSION);
@@ -351,6 +425,14 @@ mod tests {
         let mut invalid = unicode_v3_export();
         invalid["analyzer"] = serde_json::json!(UNICODE_WORD_CHAR_ANALYZER);
         assert!(load_model(&invalid.to_string()).is_err());
+    }
+
+    #[test]
+    fn v2_model_metadata_and_tokens_remain_pinned() {
+        let model = load_model(&unicode_export().to_string()).unwrap();
+        assert_eq!(model.preprocessing_version(), Some(PREPROCESSING_VERSION));
+        assert_eq!(model.prepare_text("Straße").unwrap().canonical, "straße");
+        assert!(model.tokens("Straße").word.contains(&"straße".to_owned()));
     }
 
     #[test]

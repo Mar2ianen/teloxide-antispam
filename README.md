@@ -19,6 +19,9 @@ the consuming application's responsibility.
 | `cas` | Optional CAS HTTP lookup; no networking dependency otherwise |
 | `url` | Optional `teloxide-url` parser; URL data is not scored automatically |
 
+ICU4X 2.4.0 requires Rust 1.88 or newer when `unicode-v3` is enabled. Other
+feature sets do not activate the direct ICU4X dependencies.
+
 Default features: `scoring`, `classifier`, `embedding`. Minimal classifier integration:
 
 ```toml

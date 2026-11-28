@@ -2,6 +2,9 @@
 
 Model: `alt-word-char-v2-2026-10-03`.
 Analyzer: `unicode_word_char_v2`; preprocessing: `unicode-spam-v2`.
+This artifact remains bound to V2. The opt-in ICU4X/Unicode 18 V3 view is
+intentionally incompatible and requires a separately trained and evaluated
+artifact; changing this metadata does not migrate the model.
 Calibration: `alt-word-char-validation-2026-10-03-v1`.
 Release asset: `alt_word_char_v2_2026-10-03.json`.
 SHA256: `b90d9ebae22abde31238269e595164e41025ddf4e0d1c40d5ba1810f387b2d63`.

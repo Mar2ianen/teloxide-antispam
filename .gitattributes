@@ -1,0 +1,2 @@
+# Unicode conformance data is copied byte-for-byte from the official sources.
+test-data/unicode/18.0.0/*.txt whitespace=-blank-at-eol,-blank-at-eof
